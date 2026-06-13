@@ -1,26 +1,24 @@
 {
   "name": "uart-node",
-  "version": "3.2.0",
-  "description": "ladis uart node",
+  "version": "3.3.0",
+  "description": "ladis uart node (Bun runtime, PR #20 token auth)",
   "author": "wgcairui",
   "private": true,
+  "type": "module",
   "scripts": {
-    "dev": "cross-env NODE_ENV=development nodemon ./src/main.ts ",
-    "dev:p": "cross-env NODE_ENV=production nodemon ./src/main.ts ",
-    "start": "node ./dist/main.js",
-    "ncc": "ncc build ./dist/main.js -o ./dist/ncc",
-    "build:docker": "rm -rf ./dist && tsc && npm run ncc && sudo docker build -t uartnode .",
-    "run:docker": "sudo docker stop uartnode && sudo docker rm uartnode && sudo docker run -itd --name uartnode --restart always --init -p 9000:9000 uartnode"
+    "dev": "bun --watch src/main.ts",
+    "start": "NODE_ENV=production bun src/main.ts",
+    "typecheck": "bun --check src/main.ts",
+    "build": "rm -rf ./dist && bun build ./src/main.ts --target=bun --outdir=dist --minify",
+    "build:docker": "docker build -t uartnode .",
+    "run:docker": "docker stop uartnode 2>/dev/null; docker rm uartnode 2>/dev/null; docker run -itd --name uartnode --restart always --init -p 9000:9000 -e NODE_TOKEN=$NODE_TOKEN uartnode"
   },
   "dependencies": {
-    "axios": "^0.26.1",
-    "socket.io-client": "^4.4.1"
+    "socket.io-client": "^4.7.5"
   },
   "devDependencies": {
-    "@types/node": "^16.0.0",
-    "@vercel/ncc": "^0.34.0",
-    "cross-env": "^7.0.3",
-    "nodemon": "^2.0.6",
-    "types-uart": "^2.0.6"
+    "@types/bun": "latest",
+    "typescript": "^6.0.0"
   }
 }
+

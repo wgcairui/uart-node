@@ -92,7 +92,7 @@ export default class TcpServer extends net.Server {
         const registerArguments = new URLSearchParams(data.toString())
         //判断是否是注册包
         if (registerArguments.has('register') && registerArguments.has('mac')) {
-          this.getConnections().then(el => config.count = el)
+          this.getConnectionsAsync().then(el => config.count = el)
           const IMEI = registerArguments.get('mac')!
           // 是注册包之后监听正常的数据
           // mac地址为后12位
@@ -104,7 +104,7 @@ export default class TcpServer extends net.Server {
           } else {
             // 使用proxy代理dtu对象
             this.MacSocketMaps.set(mac, new Proxy(new Client(socket, mac, registerArguments), ProxyClient))
-            console.log(`${new Date().toLocaleString()} ## ${mac}  上线,连接参数: ${socket.remoteAddress}:${socket.remotePort},Tcp Server连接数: ${await this.getConnections()}`);
+            console.log(`${new Date().toLocaleString()} ## ${mac}  上线,连接参数: ${socket.remoteAddress}:${socket.remotePort},Tcp Server连接数: ${await this.getConnectionsAsync()}`);
           }
         } else {
           socket.end('please register DTU IMEI', () => {
@@ -115,9 +115,12 @@ export default class TcpServer extends net.Server {
       });
   }
   /**
-   *  统计TCP连接数
+   *  统计TCP连接数（Promise 包装，调用方用 await）
+   *  父类 net.Server.getConnections 是 callback 风格，
+   *  这里不能 override 它的签名（会跟父类签名冲突），
+   *  所以叫 getConnectionsAsync。
    */
-  getConnections() {
+  getConnectionsAsync(): Promise<number> {
     return new Promise<number>((resolve) => {
       super.getConnections((err, nb) => {
         resolve(nb)

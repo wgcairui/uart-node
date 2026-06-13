@@ -1,11 +1,11 @@
 import os from "os";
-import { nodeInfo } from "uart";
+import { type nodeInfo } from "uart";
 export default class tool {
 
   /**
    * 节点信息
    */
-  static NodeInfo(): Uart.nodeInfo {
+  static NodeInfo(): nodeInfo {
     const hostname: string = os.hostname();
     const totalmem: number = os.totalmem() / 1024 / 1024 / 1024;
     const freemem: number = (os.freemem() / os.totalmem()) * 100;
