@@ -3,7 +3,11 @@
     /* Basic Options */
     // "incremental": true,                   /* 启用增量编译 */
     "target": "ES2020", /* Specify ECMAScript target version: 'ES3' (default), 'ES5', 'ES2015', 'ES2016', 'ES2017', 'ES2018', 'ES2019' or 'ESNEXT'. */
-    "module": "commonjs", /* 指定模块代码生成: 'none', 'commonjs', 'amd', 'system', 'umd', 'es2015', or 'ESNext'. */
+    "module": "ESNext", /* 指定模块代码生成: 'none', 'commonjs', 'amd', 'system', 'umd', 'es2015', or 'ESNext'. */
+    /* 注：原配置 commonjs，但项目里 types/uart.d.ts 用了 declare namespace Uart
+       来兼容老代码（Uart.Terminal / Uart.nodeInfo），namespace 在 commonjs
+       模式下对其他文件不可见，tsc 报 "Cannot find namespace 'Uart'"。
+       Bun runtime 本来就走 ESM，这里也跟 package.json "type": "module" 一致。*/
      //"lib": [],                             /* 指定要包含在编译中的库文件。 */
     // "allowJs": true,                       /* 允许编译javascript文件. */
     // "checkJs": true,                       /* 报告.js文件中的错误. */
@@ -36,8 +40,13 @@
     // "noImplicitReturns": true,             /* Report error when not all code paths in function return a value. */
     // "noFallthroughCasesInSwitch": true,    /* Report errors for fallthrough cases in switch statement. */
     /* Module Resolution Options */
-    // "moduleResolution": "node",            /* Specify module resolution strategy: 'node' (Node.js) or 'classic' (TypeScript pre-1.6). */
+    "moduleResolution": "bundler", /* Specify module resolution strategy: 'node' (Node.js), 'classic' (TypeScript pre-1.6), or 'bundler' (Bun/Vite/esbuild). */
+    /* 注：module: ESNext 必须配 moduleResolution: bundler，否则 tsc 报
+       "Cannot find module 'socket.io-client'"。bundler 模式允许不写 .js 后缀、
+       package.json exports 解析、types 字段直读，比 nodenext 宽松。*/
     "baseUrl": "./", /* Base directory to resolve non-absolute module names. */
+    "ignoreDeprecations": "6.0", /* tsc 6.0 标记 baseUrl 为 deprecated（7.0 移除），加这个静默。
+       未来 7.0 时再迁 paths 去掉 baseUrl 依赖。*/
     "paths": {
       "*": [
         "./types/*",
@@ -47,8 +56,13 @@
     // "rootDirs": [],                        /* List of root folders whose combined content represents the structure of the project at runtime. */
     // "typeRoots": [],                       /* List of folders to include type definitions from. */
     "types": [
-      "types-uart"
+      "bun"
     ], /* Type declaration files to be included in compilation. */
+    /* 注：之前写的是 "types-uart"（ladis 内部私有类型包），但项目根目录
+       types/uart.d.ts 已经手写了所有需要的类型（queryObjectServer /
+       registerConfig / queryOkUp / eventType / IntructQueryResult /
+       ApolloMongoResult / instructQuery / DTUoprate / nodeInfo / socketResult / AT），
+       tsconfig paths 已把 "uart" 映射到 ./types/uart.d.ts，不再需要 types-uart 包。*/
     // "allowSyntheticDefaultImports": true,  /* Allow default imports from modules with no default export. This does not affect code emit, just typechecking. */
     "esModuleInterop": true, /* Enables emit interoperability between CommonJS and ES Modules via creation of namespace objects for all imports. Implies 'allowSyntheticDefaultImports'. */
     // "preserveSymlinks": true,              /* Do not resolve the real path of symlinks. */

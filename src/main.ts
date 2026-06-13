@@ -44,9 +44,9 @@ IOClient
     })
 
     // 服务器要求发送查询节点运行状态
-    .on("nodeInfo", async (name) => {
+    .on("nodeInfo", async (name: string) => {
         const node = tool.NodeInfo()
-        const tcp = await tcpServer.getConnections()
+        const tcp = await tcpServer.getConnectionsAsync()
         fetch.nodeInfo(name, node, tcp)
     })
 

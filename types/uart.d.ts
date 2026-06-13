@@ -1,4 +1,7 @@
-import { Socket } from "net";
+// 注：此文件全 type-only，必须用 import type，否则在 module: ESNext 下
+// 整个文件不再是 ambient，declare namespace Uart 不会变全局可见，
+// 调用方 Uart.Terminal / Uart.nodeInfo 会报 "Cannot find namespace 'Uart'"。
+import type { Socket } from "net";
 type eventType = 'QueryInstruct' | 'OprateInstruct' | 'ATInstruct'
 
 interface socketResult { buffer: Buffer | string, useTime: number, useByte: number }
@@ -89,7 +92,8 @@ interface nodeInfo {
   loadavg: number[];
   type: string;
   uptime: string;
-  userInfo: any;
+  version: string;
+  userInfo?: any;
 }
 
 
