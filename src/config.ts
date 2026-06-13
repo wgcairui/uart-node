@@ -1,6 +1,28 @@
 const isProd = process.env.NODE_ENV === "production";
 
 const server = process.env.TEST_SERVER_HOST || "http://localhost:9010"
+
+/**
+ * Node 身份令牌（明文）
+ *
+ * 对应 uart-server PR #20 (feat(node-auth)) 鉴权：
+ * - Socket.IO 握手走 auth.token / query.token / x-node-token header 三通道
+ * - HTTP /api/node/* 走 x-node-token header（axios 改原生 fetch 后注入）
+ * - 部署流程：server 端先合 PR #20 -> admin rotate-token 拿明文 -> 写进 Node 的 NODE_TOKEN env
+ *
+ * 没设 NODE_TOKEN 时只 warn 不中断（与 uart-pesiv-node 行为一致），
+ * 等 server 端 PR #20 部署后再强制。
+ */
+export const NODE_TOKEN: string = (process.env.NODE_TOKEN ?? '').trim()
+
+if (!NODE_TOKEN) {
+  console.warn(
+    '[config] NODE_TOKEN not set. ' +
+      'If server has merged PR #20, this node will be rejected. ' +
+      'Get a token via POST /api/v2/admin/dashboard/nodes/:name/rotate-token'
+  )
+}
+
 export default {
   /**
    * uartServer地址,用于socket连接

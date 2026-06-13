@@ -1,3 +1,17 @@
 node_modules
 dist
+dist-test
 xprofiler_output/*
+
+# macOS
+.DS_Store
+
+# Bun
+bun.lockb
+# 注：bun.lock（文本格式，Bun 1.1+ 默认）要进 git，
+# 跟 package-lock.json / pnpm-lock.yaml 一样用于 reproducible builds。
+# bun.lockb（二进制格式）忽略
+
+# Editor
+.vscode/
+.idea/
