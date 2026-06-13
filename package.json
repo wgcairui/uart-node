@@ -10,7 +10,7 @@
     "start": "NODE_ENV=production bun src/main.ts",
     "typecheck": "bun --check src/main.ts",
     "build": "rm -rf ./dist && bun build ./src/main.ts --target=bun --outdir=dist --minify",
-    "build:docker": "bun run build && docker build -t uartnode .",
+    "build:docker": "docker build -t uartnode .",
     "run:docker": "docker stop uartnode 2>/dev/null; docker rm uartnode 2>/dev/null; docker run -itd --name uartnode --restart always --init -p 9000:9000 -e NODE_TOKEN=$NODE_TOKEN uartnode"
   },
   "dependencies": {
