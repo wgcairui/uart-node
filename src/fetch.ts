@@ -1,5 +1,5 @@
 import { queryOkUp, type nodeInfo } from "uart"
-import config, { NODE_TOKEN } from "./config"
+import { NODE_TOKEN, SERVER_URL } from "./config"
 
 // 兼容旧代码 namespace Uart.Terminal 写法（types-uart 包里是 namespace）
 // 项目自带的 types/uart.d.ts 没有 Uart namespace alias，
@@ -46,7 +46,7 @@ class Fetch {
         if (NODE_TOKEN) headers['x-node-token'] = NODE_TOKEN
 
         try {
-            const res = await fetch(config.ServerApi + path, {
+            const res = await fetch(SERVER_URL + path, {
                 method: 'POST',
                 headers,
                 body: JSON.stringify(data),

@@ -1,4 +1,4 @@
-import config from "./config"
+import config, { IO_CONFIG } from "./config"
 import { registerConfig, queryObjectServer, instructQuery, DTUoprate } from "uart"
 import IOClient from "./IO"
 import TcpServer from "./TcpServer"
@@ -10,8 +10,8 @@ let tcpServer: TcpServer
 IOClient
     // 连接成功,触发node注册,发送node信息
     .on("connect", () => {
-        console.log(`${new Date().toLocaleString()}:已连接到UartServer:${config.ServerHost},socketID:${IOClient.id},`);
-        console.log(`已连接到UartServer:${config.ServerHost},socketID:${IOClient.id},`);
+        console.log(`${new Date().toLocaleString()}:已连接到UartServer:${IO_CONFIG.uri},socketID:${IOClient.id},`);
+        console.log(`已连接到UartServer:${IO_CONFIG.uri},socketID:${IOClient.id},`);
     })
     .on("accont", () => {
         IOClient.emit("register", tool.NodeInfo());
