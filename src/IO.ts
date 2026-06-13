@@ -1,18 +1,18 @@
 import socketClient from "socket.io-client";
-import config, { NODE_TOKEN } from "./config";
+import { IO_CONFIG, NODE_TOKEN } from "./config";
 
 /**
  * 连接到uartServer的IO对象
  */
-console.log(`连接socket服务器:${config.ServerHost}`);
+console.log(`连接socket服务器:${IO_CONFIG.uri}`);
 
 // PR #20 鉴权：Socket.IO 握手三通道（与 uart-pesiv-node io-client.ts 对齐）
 // - auth.token:    推荐通道，websocket 握手也能用
 // - query.token:   备选通道，server 端 ?token= 也认
 // - extraHeaders:  polling 通道用，握手阶段的 x-node-token header
 // - transportOptions: 4.5+ 修复了 websocket 阶段 extraHeaders 失效的 bug，4.7.5 已经默认带
-const IOClient = socketClient(config.ServerHost + '/node', {
-    path: "/client",
+const IOClient = socketClient(IO_CONFIG.uri, {
+    path: IO_CONFIG.path,
     auth: NODE_TOKEN ? { token: NODE_TOKEN } : undefined,
     query: NODE_TOKEN ? { token: NODE_TOKEN } : undefined,
     extraHeaders: NODE_TOKEN ? { 'x-node-token': NODE_TOKEN } : undefined,

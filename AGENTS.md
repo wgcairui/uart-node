@@ -11,6 +11,10 @@
 
 - **NODE_TOKEN 绝对不能写进 Dockerfile ARG/ENV** — 会进镜像层泄漏到 registry。
   必须运行时注入：`docker run -e NODE_TOKEN=...` 或 k8s secret。
+- **全 env 驱动**（与 `uart-pesiv-node` 对齐）：`IO_URI` / `IO_PATH` / `SERVER_URL` / `NODE_TOKEN`
+  都从 `process.env` 读，**不要**在 config.ts 里加 `isProd` / `NODE_ENV` 模式判断 —
+  bun build --minify 会 DCE 掉被求值的 prod 分支，运行时永远走 dev fallback。
+  容器里跑 prod host 一定要 `IO_URI=...` 显式注入。
 
 ## 未回归的运行时风险
 
