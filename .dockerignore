@@ -6,9 +6,12 @@ dist
 dist-test
 **/*.ts
 !src/**/*.ts
-types
 Dockerfile
-tsconfig.json
 pnpm-lock.yaml
 package-lock.json
 yarn.lock
+# 注：以下文件不能 ignore — Dockerfile builder 阶段 bun build 要用：
+#   tsconfig.json: 读 paths / module / moduleResolution / ignoreDeprecations
+#   types/:         tsconfig paths 映射的 .d.ts（types/uart.d.ts 兜底 import from "uart"）
+# 之前是直接抄 uart-pesiv-node 的 .dockerignore 模板，那边是 bun build --compile 单文件
+# 不需要 tsconfig；UartNode 走容器内 bun build 路径，必须带这两个进 context。
