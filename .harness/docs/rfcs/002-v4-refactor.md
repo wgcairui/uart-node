@@ -527,6 +527,10 @@ export class CellularSniffer implements ProtocolSniffer {
 - **2026-06-15** — v1.1 增量：补 §11 AT 设备信息采集 + §12 生命周期状态机。
   - AT 查询范围：现状 8 条 + 7 条高频补充 = 15 条（cairui 拍板 `at-medium`）
   - 生命周期：8 状态 + health score（cairui 拍板 `sm-medium`）
+- **2026-06-15** — v1.2 增量：补 §11.6 Profile Cache 复用机制。
+  - cache 有效期：按设备版本号 `cache-version`（cairui 拍板）
+  - Node 拉取方式：主动 GET `api-pull`（cairui 拍板）
+  - 触发原因（cairui 反馈）：进程重启时 profile 字段被无意义重查
 
 ## 10. 待 cairui 拍板的细节
 
@@ -743,6 +747,270 @@ interface dtuinfoRequestV4 {
 - 60s 后批 2 运行时类刷新成功
 - `traffic` 字段的发送/接收字节数随时间增长
 - 重连后第二层 timer 重启（**不能泄漏**）
+
+### 11.6 Profile Cache 复用机制（**新增**——cairui 拍板 `cache-version` + `api-pull`）
+
+> 现状问题（**cairui 反馈**）：
+> > 有些参数如果已经拿到过一次就不需要再拿了，所以需要先向 server 获取一个设备数据详情来看
+>
+> 场景：
+> - DTU 5 分钟前刚 register 过，profile 完整（IMEI/IMSI/APN/...）
+> - **UartNode 进程重启**（bugfix / OOM / k8s 滚动升级）
+> - DTU 重新 TCP 连上来 → 走 register 路径 → 又查 15 条 AT
+> - **5 分钟前查过的字段没必要重查**——server 端有 cache，Node 拉下来复用即可
+>
+> 这跟 `uart-pesiv-node` 设计哲学反着——pesiv 是**单设备**，没有这种"重连"问题。UartNode 是**多设备长跑**，这个能力**必须**。
+
+#### 11.6.1 设计原则（**两项拍板**）
+
+| 决策点 | 选择 | 理由 |
+|---|---|---|
+| 缓存有效期 | **按设备版本号**（`cache-version`）| 不靠时间，靠 DTU 主动通知"profile 变了"——IMEI/IMSI/ICCID/PID/VER 这些**永不变**，cache 一旦写就是权威，**直到 DTU 自己触发失效** |
+| Node 拿 cache 方式 | **主动 GET 拉取**（`api-pull`）| Node 启动 / DTU 重连时 GET，简单可控；**不走 Socket.IO push**（不跟 server 端 registerSuccess 流程耦合）|
+| Cache 存储位置 | **server 端**（`uart-server` mongo）| 单点权威，Node 进程重启不丢；多 node 共享 |
+| Cache 失效触发 | **DTU 主动上报** profile 变更事件 | AT+FCLR / AT+RELD / AT+UART=1 写操作 → Node 立刻 POST 通知 server invalidate |
+
+**为什么不用时间过期（`cache-timestamp`）？**
+
+- **IMEI/IMSI/ICCID 出厂定**，写一次就是永真；时间过期会让 Node 没事找事重查
+- **配置类（UART/HEART/APN）** 改的频率低（几天/几周一次），按时间过期会"过度查"
+- **动态类（signal/traffic）** 本来就要重查，**跟 cache 无关**——cache 只解决"静态/配置类不重查"
+
+**为什么不走 Socket.IO push？**
+
+- push 跟 `registerSuccess` 事件耦合，server 端要保证 push 时机（先查再 push）——容易出 race condition
+- GET 拉是**同步可重试**的，Node 失败就降级到全量查，**逻辑简单**
+
+#### 11.6.2 Cache 数据模型
+
+```ts
+// server 端 mongo collection: dtuProfileCache
+interface DtuProfileCache {
+  mac: string                  // IMEI 后 12 位（保留主键）/ 或 15 位（决策见 §11.4）
+  nodeName: string             // 上报的 node 名称
+  profile: DtuProfile          // 完整 DtuProfile（14 字段）
+  version: number              // 单调递增版本号（每次 invalidate / 更新 +1）
+  updatedAt: number            // ms timestamp（用于 audit / debug，**不用于过期判断**）
+  updatedBy: 'initial_query' | 'background_refresh' | 'cache_reuse' | 'dtu_invalidate'
+  invalidateHook: {
+    // DTU 主动通知时由 Node 写入，server 端保存
+    expectedEvent: 'AT+FCLR' | 'AT+RELD' | 'AT+UART=1' | 'user_manual'
+    ackAt: number
+  } | null
+}
+```
+
+**`version` 字段的作用**：
+- 每次 invalidate / 更新 +1
+- Node 上报 dtuInfo 时带 `version`，server 端可以**丢弃旧版本的并发更新**
+- debug 友好：日志里看到 "v1 → v2" 一眼就知道"profile 改过一次"
+
+#### 11.6.3 三步流程（**register 路径**）
+
+```
+DTU TCP 连上
+  ↓
+[TcpServer] sniff register&mac=... → CellularRegisterHandler.handle()
+  ↓
+[1] GET /api/node/dtu-info-cache?mac=98D863CC870D
+     ↓
+     Server 返回:
+       a) 200 + { hit: true, version: 7, profile: {...}, updatedAt: ... }  ← 命中
+       b) 200 + { hit: false }                                              ← 没缓存
+       c) 404 / 500 / 超时                                                  ← server 异常（**降级到全量重查**）
+  ↓
+[2] 按结果分支:
+     命中: profile = response.profile, version = 7
+            重查"动态字段"（GSLQ/GSMST/NTIME/DATA=A,B,C，~6 条, ~1.5s）
+            合并 → 上报 dtuInfo (含 version=7)
+     未命中: 全量查 5 条必查 (PID/IMEI/ICCID/IMSI/GSLQ, ~1.5s)
+            全部完成后 POST /api/node/dtu-info-cache 写入 server (version=1)
+  ↓
+[3] 启动第二层定时器（同 §11.3）
+```
+
+**关键**：**命中** ≠ **完全跳过 AT 查询**，至少查**动态字段**（GSLQ/GSMST/NTIME/DATA）——这些 5 分钟前查的已经过期了。
+
+#### 11.6.4 三种时效性分类（**这是 cache-version 的核心**）
+
+不是所有字段都需要每次重查，按"变化频率"分三类：
+
+| 类别 | 字段 | 频率 | Cache 命中时是否重查 |
+|---|---|---|---|
+| **静态**（**永不变或极少变**）| `imei` / `imsi` / `iccid` / `pid` / `ver` / `gver` / `appver` | 设备出厂定 | ❌ **跳过**（cache 命中 → 直接用）|
+| **配置**（**人/系统改了会变**）| `host` / `uart` / `iotStat` / `apn` / `heartbeat` / `jw` | 偶尔（几天/几周）| ⚠️ **推荐全重查**（~400ms 总开销，换"profile 永远最新"）|
+| **动态**（**实时变**）| `signal` / `network` / `clock` / `traffic` | 实时 | ✅ **必须重查** |
+
+**配置类策略选择**：RFC 002 推荐**全重查**——AT+UART=1 / AT+HEART 这种 AT 查询开销小（~100ms 一条），**重查成本低**，换取"profile 永远是最新的"，**避免"上次查的配置跟现在不一致"导致 server 端数据漂移**。
+
+#### 11.6.5 DTU 主动通知 profile 失效
+
+**3 个 AT 操作**会触发 Node 主动通知 server 让 cache 失效：
+
+| 触发 | AT 指令 | Node 检测方式 | 副作用 |
+|---|---|---|---|
+| **恢复出厂** | `AT+FCLR` | Node 收到 `+ok=rebooting...`（FCLR 响应特征）| Node → `POST /api/node/dtu-info-cache/invalidate` |
+| **恢复默认参数** | `AT+RELD` | Node 收到 `+ok`（RELD 响应特征）| 同上 |
+| **修改串口参数** | `AT+UART=1,...` | Node 收到 `+ok`（UART 响应特征）| 同上 |
+| **人工标记** | （server 端 admin 手动 invalidate）| **暂无接口，未来加** | — |
+
+> **关键**：Node 通过 **AT 响应的特征字**判断是哪个指令，**不需要额外标记**——
+> 因为 `+ok=rebooting...` 这种字符串**只可能是 FCLR 产生的**。
+
+```ts
+// src/services/uploader.ts（扩展）
+export function invalidateDtuProfileCache(mac: string, reason: string): boolean {
+  return enqueue('dtu-info-cache/invalidate', { mac, reason })
+}
+```
+
+#### 11.6.6 Server 端新接口（**需 server 端 agent 协调**）
+
+> ⚠️ **跨项目约束**：这 3 个接口在 `uart-server`（agent-ae682922673b）那侧新建，
+> RFC 002 Phase 3 落地前需要跟他们同步、不能擅自假设。
+
+| 方法 | 路径 | 用途 | 请求 | 响应 |
+|---|---|---|---|---|
+| `GET` | `/api/node/dtu-info-cache` | Node 启动 / 重连时拉 | `?mac=98D863CC870D` | `{ hit: bool, version?: number, profile?: DtuProfile, updatedAt?: number }` |
+| `POST` | `/api/node/dtu-info-cache` | Node 全量查完后写 | `{ mac, profile, version }` | `{ ok: 1, version }` |
+| `POST` | `/api/node/dtu-info-cache/invalidate` | DTU 主动通知失效 | `{ mac, reason }` | `{ ok: 1, version }` |
+
+**鉴权**：跟现有 `/api/node/*` 一样走 `x-node-token` header（PR #20）。
+
+**`GET` 路径冲突注意**：现有 `/api/node/dtuinfo`（POST）是**上报**接口，新 `GET /api/node/dtu-info-cache` 是**拉取**接口——**方法不同路径不同**，不冲突。
+
+#### 11.6.7 实现伪代码
+
+```ts
+// src/dtus/profile-cache.ts（新文件）
+export interface ProfileCacheResult {
+  hit: boolean
+  version?: number
+  profile?: DtuProfile
+  updatedAt?: number
+}
+
+export async function fetchProfileCache(mac: string): Promise<ProfileCacheResult> {
+  try {
+    const res = await fetch(
+      `${SERVER_URL}dtu-info-cache?mac=${encodeURIComponent(mac)}`,
+      { method: 'GET', headers: authHeaders(), signal: AbortSignal.timeout(3000) }
+    )
+    if (res.status === 404) return { hit: false }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    return await res.json()
+  } catch (err) {
+    console.warn(`[profile-cache] fetch failed for ${mac}, fall back to full query:`, err)
+    return { hit: false }  // **降级：拉失败 → 当作没缓存**
+  }
+}
+
+export async function writeProfileCache(mac: string, profile: DtuProfile, version: number): Promise<void> {
+  // 走 Uploader 队列（带重试 + 背压）
+  enqueue('dtu-info-cache', { mac, profile, version })
+}
+
+export function invalidateProfileCache(mac: string, reason: string): void {
+  enqueue('dtu-info-cache/invalidate', { mac, reason })
+}
+```
+
+```ts
+// src/dtus/cellular.ts（register 路径集成）
+class CellularDtu extends Dtu {
+  async initialize() {
+    // 1) 拉 cache
+    const cache = await fetchProfileCache(this.mac)
+    let queryPlan: ATCommand[]
+
+    if (cache.hit && cache.profile) {
+      // 命中：profile 字段直接用
+      Object.assign(this.profile, cache.profile)
+      this.profile.version = cache.version!
+      // 重查动态字段 + 配置字段（~9 条，~1.5s）
+      queryPlan = ['GSLQ', 'GSMST', 'UART=1', 'APN', 'HEART', 'NTIME',
+                   'DATA=A', 'DATA=B', 'DATA=C']
+    } else {
+      // 未命中：全量查 5 条必查（~1s）
+      queryPlan = ['PID', 'IMEI', 'ICCID', 'IMSI', 'GSLQ']
+    }
+
+    // 2) 执行查询
+    const results = await this.queryAT(queryPlan)
+    Object.assign(this.profile, results)
+
+    // 3) 上报 server
+    this.io.uploadDtuInfo(this.profile)
+    if (!cache.hit) {
+      // 第一次拿全量，**写回 server** 让别的 node 复用
+      await writeProfileCache(this.mac, this.profile, this.profile.version ?? 1)
+    }
+
+    // 4) 启动第二层定时器（同 §11.3）
+    this.scheduleBackgroundRefresh()
+  }
+
+  // 当 server 下发 DTUoprate 内容是 FCLR/RELD/UART=1 时
+  // ATParse 解析完 → 检测响应特征字 → 触发 cache invalidate
+  private onATResponse(query: DTUoprate, response: Buffer): void {
+    // ... 现有 ATParse 逻辑 ...
+    if (this.isProfileMutating(query.content, response)) {
+      invalidateProfileCache(this.mac, query.content)
+    }
+  }
+}
+```
+
+#### 11.6.8 测试矩阵（**新增**）
+
+**单测**（mock server fetch）：
+
+```ts
+describe('ProfileCache.fetchProfileCache', () => {
+  test('200 + hit=true 返回 profile + version', () => { ... })
+  test('200 + hit=false 返回 { hit: false }', () => { ... })
+  test('404 返回 { hit: false }', () => { ... })
+  test('5xx 抛错 → 降级返回 { hit: false }', () => { ... })
+  test('网络超时 3s → 降级', () => { ... })
+})
+
+describe('CellularDtu.initialize with cache', () => {
+  test('命中 cache：重查动态+配置字段 (9 条)，不上报 full version', () => { ... })
+  test('未命中：全量查必查 5 条 + 写回 cache', () => { ... })
+  test('cache 拉失败（5xx）：降级到全量查，不影响 register 流程', () => { ... })
+  test('profile.version 自增：第一次=1, 写回 server, 第二次读 v=1+1=2', () => { ... })
+})
+
+describe('ProfileCache.invalidateProfileCache', () => {
+  test('DTUoprate = FCLR 触发 invalidate（识别 +ok=rebooting...）', () => { ... })
+  test('DTUoprate = RELD 触发 invalidate（识别 +ok）', () => { ... })
+  test('DTUoprate = UART=1,... 触发 invalidate（识别 +ok）', () => { ... })
+  test('invalidate 后下次 register 必查 IMEI/PID/ICCID', () => { ... })
+  test('invalidate 失败时只打 log（不影响 AT 响应回包）', () => { ... })
+})
+```
+
+**集成**（staging 24h 回归）：
+
+- Node 启动 → DTU 第一次 register → 写 cache（version=1）
+- Node 重启 → DTU 重连 register → 命中 cache → 重查动态+配置字段（耗时从 ~2s 降到 ~1.5s）
+- AT+FCLR 下行指令 → 触发 invalidate → 下次 register 必查必查 IMEI（**version 自增**）
+- AT+UART=1 改串口参数 → invalidate → 下次 register 查到新串口参数
+- server 端 mongo `dtuProfileCache` collection 实际数据验证
+
+#### 11.6.9 跟 server 端协调的 checklist（**跨项目约束**）
+
+> **AGENTS.md 写过的纪律**：跟 `midwayuartserver`（agent-ae682922673b）走 Socket.IO 协议，
+> server 端事件名 / payload 格式变更会反向影响这里。**HTTP 接口同样要同步**。
+
+落地 RFC 002 Phase 3 之前，cairui 需要跟 server 端 agent 同步：
+
+- [ ] server 端实现 `GET /api/node/dtu-info-cache?mac=`
+- [ ] server 端实现 `POST /api/node/dtu-info-cache`
+- [ ] server 端实现 `POST /api/node/dtu-info-cache/invalidate`
+- [ ] server 端 mongo 加 `dtuProfileCache` collection（带 TTL / 不带 TTL？建议**不带**，靠 DTU 主动 invalidate 触发）
+- [ ] 三方约定 cache 响应 schema（`{ hit, version, profile, updatedAt }`）
+- [ ] server 端是否需要新事件通知 Node "你的 cache 被 server 主动 invalid 了"？（可选，**先不做**）
 
 ---
 
