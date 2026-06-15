@@ -15,3 +15,5 @@ bun.lockb
 # Editor
 .vscode/
 .idea/
+.opencode/
+.tmp-hf-docs/
