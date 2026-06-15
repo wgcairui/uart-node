@@ -427,43 +427,99 @@ interface DtuAlertEvent {
 
 ## 5. 跨项目协调 checklist
 
+> **状态更新**（2026-06-15 19:43）：cairui 已拍**部署路径 = C**（两套都放，先老 midway 让 v3.3.0 不掉线，uartserver-ng 同步）。
+> **待 cairui 补 3 项**：mac 主键 12/15 位 / dtuAlert type 3/4 个 / 拍板日期（详见 §7）。
+
 UartNode RFC 002 Phase 1-3 落地**之前**，cairui 跟 server 端 agent 同步：
 
-- [ ] server 端确认 §1.1 现有 Socket.IO 事件不破坏
-- [ ] server 端确认 §1.2 现有 HTTP 接口 dtuinfoV4 payload 全 optional 加字段
-- [ ] server 端实现 §2.1 `GET /api/node/dtu-info-cache?mac=`
-- [ ] server 端实现 §2.2 `POST /api/node/dtu-info-cache`
-- [ ] server 端实现 §2.3 `POST /api/node/dtu-info-cache/invalidate`
-- [ ] server 端 mongo 新增 §3.1 `dtuProfileCache` collection
-- [ ] server 端确认 §4.1 `dtuState` 事件名 + payload
-- [ ] server 端确认 §4.2 `dtuHealth` 事件名 + payload
-- [ ] server 端确认 §4.3 `dtuAlert` 事件名 + payload
-- [ ] server 端确认 zod schema（§2.1 末）
-- [ ] server 端确认 cache 不带 TTL（§3.1 TTL 决策）
-- [ ] server 端确认 `terminals` collection 是否需要新字段 `healthScore`（§4.2）
+- [x] **§1.1 现有 Socket.IO 事件不破坏** — server 端 ✅ accept（2026-06-15）
+- [x] **§1.2 现有 HTTP 接口 dtuinfoV4 payload 全 optional 加字段** — server 端 ✅ accept（2026-06-15）
+- [x] **§2.1 `GET /api/node/dtu-info-cache?mac=`** — server 端 🔄 modified（具体方案待 server 端提供，**C 路径下 3.0-4.5 人天**）
+- [x] **§2.2 `POST /api/node/dtu-info-cache`** — server 端 🔄 modified（同上）
+- [x] **§2.3 `POST /api/node/dtu-info-cache/invalidate`** — server 端 ✅ accept（2026-06-15）
+- [x] **§3.1 `dtuProfileCache` collection** — server 端 🔄 modified（集成点细节待 server 端提供）
+- [x] **§4.1 `dtuState` 事件名 + payload** — server 端 ✅ accept（2026-06-15） + `latest-wins` 覆盖（cairui 拍）
+- [x] **§4.2 `dtuHealth` 事件名 + payload** — server 端 🔄 modified（`terminals.healthScore` 字段）
+- [ ] **§4.3 `dtuAlert` 事件名 + payload** — server 端 ❌ reject（**§4.3 漏写 FATAL**——RFC 002 §12.4 是 4 个值，跟 §4.3 不冲突，**修 §4.3**；cairui 拍 4 个还是 3 个）
+- [x] **Zod schema（§2.1 末）** — server 端 🔄 modified（**server 端是否直接抄**待确认）
+- [x] **cache 不带 TTL（§3.1 TTL 决策）** — server 端 ✅ accept（2026-06-15）
+- [x] **`terminals` collection 加 `healthScore` 字段** — server 端 🔄 modified（**字段定义 / 索引**待 server 端提供）
+
+**额外接受项**（cairui 拍）：
+
+- [x] **alert 去重策略**（5min 内同 mac+type+message 不重推）— server 端接受，已加进 §4.3
 
 ## 6. 现状 gap（**UartNode 已知**）
 
-> 这部分给 server 端 agent 看的**当前现状**——UartNode 期望的接口有些 server 端还没实现。
+> **v2 更新**（2026-06-15）—— server 端 agent 现场验证，gap 比初版**严重**：
+> - **老 midway + uartserver-ng (Fastify) 两套架构并存**
+> - 老 midway 走 **Node token** 鉴权（PR #20）
+> - uartserver-ng 走 **JWT + role** 鉴权
+> - UartNode v3.3.0 `src/fetch.ts:49` 默认 `SERVER_URL=http://localhost:9010/api/node/`，**今天只能打老 midway**
+
+### 6.1 接口 gap 表
 
 | 期望接口 | server 端现状 | 影响 |
 |---|---|---|
-| `POST /api/node/dtuinfo` | ⚠️ **新架构（uartserver-ng Fastify）还没迁**——老 midway 项目有 | UartNode v3.3.0 跑老 midway server 时正常；切到 uartserver-ng 后**会 404**——需要 server 端 agent 同步迁移 |
-| `POST /api/node/queryData` | 同上 | 同上 |
-| `POST /api/node/nodeInfo` | 同上 | 同上 |
-| `POST /api/node/UartData` | 同上 | UartNode v3.3.0 已废弃（Cache.ts 死代码）；v4 删 |
-| `GET /api/node/dtu-info-cache` | ❌ **没实现**（UartNode v4 新增）| RFC 002 Phase 3 落地前需要 server 端实现 |
-| `POST /api/node/dtu-info-cache` | ❌ **没实现** | 同上 |
-| `POST /api/node/dtu-info-cache/invalidate` | ❌ **没实现** | 同上 |
-| `dtuState` / `dtuHealth` / `dtuAlert` 事件 | ❌ **没实现** | RFC 002 Phase 2 落地前需要 server 端支持 |
+| `POST /api/node/dtuinfo` | ✅ 老 midway 有 | v3.3.0 正常 |
+| `POST /api/node/queryData` | ✅ 老 midway 有 | v3.3.0 正常 |
+| `POST /api/node/nodeInfo` | ✅ 老 midway 有 | v3.3.0 正常 |
+| `POST /api/node/UartData` | ✅ 老 midway 有 | UartNode v3.3.0 已废弃（Cache.ts 死代码）；v4 删 |
+| ❌ 上述 `/api/node/*` 在 uartserver-ng (Fastify) | **完全没迁** | **切 server 端架构 = 404**，需同步迁移 |
+| `GET /api/node/dtu-info-cache` | ❌ 两套都没实现（UartNode v4 新增）| RFC 002 Phase 3 落地前需 server 端实现 |
+| `POST /api/node/dtu-info-cache` | ❌ 同上 | 同上 |
+| `POST /api/node/dtu-info-cache/invalidate` | ❌ 同上 | 同上 |
+| `dtuState` / `dtuHealth` / `dtuAlert` 事件 | ❌ 两套都没实现 | RFC 002 Phase 2 落地前需 server 端支持 |
 
-**建议 server 端 agent 优先级**：
-1. **最高**：迁移老 `/api/node/*` 到 Fastify（**UartNode v3.3.0 当前就在调这些**——切 server 端架构会断）
-2. **高**：实现新增 3 个 dtu-info-cache 接口 + dtuProfileCache collection
-3. **中**：实现 3 个新 Socket.IO 事件
-4. **低**：优化 cache 策略（TTL / 压缩 / 持久化）
+### 6.2 部署目标（cairui 拍 = **C**）
+
+> **C 路径** = 两套都放，**先老 midway 让 v3.3.0 不掉线**，**uartserver-ng 同步迁移**
+
+| 阶段 | 任务 | 估时 |
+|---|---|---|
+| **server 端（老 midway）** | 迁移 `/api/node/*` 4 个老接口 + 新增 3 个 `dtu-info-cache` + 1 个 mongo collection + 3 个 Socket.IO 事件 | **3.0-4.5 人天**（server 端 agent） |
+| **server 端（uartserver-ng）** | 同上 + 适配 JWT+role 鉴权 | cairui 排期（待估）|
+| **UartNode v4** | RFC 002 Phase 1-3 落地 | 11-17 天（已估） |
+
+**好处**：
+- v3.3.0 不掉线（继续打老 midway）
+- uartserver-ng 重构方向保持（C 路径不"为了快就妥协方向"）
+- 风险最低（两套都通，**v3.3.0 / v4 可以灰度切换**）
+
+**坏处**：
+- 维护成本翻倍（短期）
+- 鉴权体系**两套并存**期间要明确文档
+
+### 6.3 建议 server 端 agent 优先级
+
+1. **最高**：老 midway 迁移 `/api/node/*` + 新增 3 个 dtu-info-cache 接口
+2. **高**：老 midway mongo 加 `dtuProfileCache` collection（**不带 TTL**）
+3. **中**：老 midway 实现 3 个新 Socket.IO 事件（`dtuState` / `dtuHealth` / `dtuAlert`）
+4. **中**：老 midway 适配 `terminals.healthScore` 字段
+5. **中**：uartserver-ng 同步迁移以上（cairui 排期）
+6. **低**：优化 cache 策略（压缩 / 持久化）
 
 ## 7. 决策记录
 
-- **2026-06-15** — 草案创建。给 server 端 agent-ae682922673b 看的接口契约。
-- 后续 server 端拍板后更新：✅ accepted / ❌ rejected / 🔄 modified
+- **2026-06-15 19:00** — 草案创建。给 server 端 agent-ae682922673b 看的接口契约。
+- **2026-06-15 19:10** — server 端 agent 现场验证 §6 gap，发现两套架构并存、鉴权体系不同。
+- **2026-06-15 19:25** — server 端 agent 给 §5 12 条初步状态（8 ✅ + 4 🔄 + 1 ❌ = 13 实际是 12 条 + 1 修正）。
+- **2026-06-15 19:43** — **cairui 拍板：部署路径 = C**（两套都放，先老 midway 让 v3.3.0 不掉线，uartserver-ng 同步）。
+  - 3.0-4.5 人天 server 端老 midway + uartserver-ng cairui 排期
+  - §5 checklist 已标 ✅/🔄/❌
+  - §6 改写为 v2（gap v2 + 部署目标 + 估时表）
+
+### 待 cairui 补 3 项（**收到后 commit + 回 server 端**）
+
+| # | 项 | 我推 | 状态 |
+|---|---|---|---|
+| 1 | mac 主键 12 位 vs 15 位 IMEI | 15 位（避免 LAN MAC 命名空间冲突）| ⚠️ 待拍 |
+| 2 | dtuAlert type 3 vs 4 个 | 4 个（跟 RFC 002 §12.4 对齐；FATAL 留 dtuAlert，不抽到 alarm）| ⚠️ 待拍 |
+| 3 | 拍板日期 YYYY-MM-DD | `2026-06-15`（今天——server 端 agent 写 MR 描述用）| ⚠️ 待确认 |
+
+> **cairui 拍完这 3 项**后我立刻：
+> 1. 更新 §5/§6 状态
+> 2. 微调 RFC 002 §11.6.6（接口 12 条 modified 项的最终方案）
+> 3. 微调 RFC 002 §12.4（dtuAlert type 枚举最终 3/4）
+> 4. commit + 删 cron + **一次性回 server 端 agent 拍板结果 + 4 个 metadata 数字**
+> 5. 推 PR #1（**不依赖**这 3 项）
