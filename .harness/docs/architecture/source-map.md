@@ -68,6 +68,13 @@
 
 **关键结论**：LAN 改造**只动** `TcpServer.ts` / `client.ts` / `tool.ts` 三个文件 + 新增 1-2 个 adapter 文件。
 
+**已知 bug 残留**（commit 6fa4359 修了 `config.ts`，**没修** `TcpServer.ts`）：
+
+- `TcpServer.ts:37, 49` 还在用 `process.env.NODE_ENV === 'production' ? conf.Port : config.localport`
+- bun build --minify 后 DCE 掉 prod 分支，**容器跑 prod host 永远走 `config.localport = 9000`**
+- 如果将来 `conf.Port` 不是 9000（server 端下发非默认 port），`NODE_ENV=production` 的容器会**连错端口**
+- 改 TcpServer 时**顺手清掉这俩**，改成全 env：`process.env.LISTEN_PORT ?? conf.Port ?? config.localport`
+
 ## 2. 关键调用链
 
 ### 2.1 DTU 上线（4G 当前路径）
@@ -149,6 +156,7 @@ QueryInstruct → all timeout (10 次)
 | `+ok` 解析 | `tool.ts:35` | `/(^\+ok)/.test(str)` | LAN 改 EPORT> 提示符或 HTTP |
 | `AT+Z` 硬重启 | `client.ts:273` | `'Z'` | LAN 走 Web/REST API |
 | 10s timeout 写死 | `TcpServer.ts:71` | `setTimeout(..., 10000)` | LAN 拓扑要可配 |
+| **残留 `NODE_ENV` 模式判断** | `TcpServer.ts:37, 49` | `process.env.NODE_ENV === 'production' ? conf.Port : config.localport` | bun build --minify 会 DCE 掉，**prod 容器跑不到 prod 端口**——必须**全 env 改写**（commit 6fa4359 修了 config.ts，没修 TcpServer）|
 
 ## 5. 跟协议**无关**的可复用层
 
