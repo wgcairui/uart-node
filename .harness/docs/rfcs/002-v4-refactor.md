@@ -987,8 +987,12 @@ export function connectAndNoDelay(port: number, host = '127.0.0.1'): Promise<Soc
 ```ts
 interface DtuProfile {
   // —— 身份 ——
-  mac: string             // IMEI 后 12 位（现有 key）
-  imei: string            // 15 位完整 IMEI（新增）
+  mac: string             // **cairui 拍板 2026-06-15：15 位 IMEI 主键**（4G/2G/NB 设备）；LAN 设备是 `mac:98D863000002`（加前缀）
+                            // ⚠️ 部署期兼容：当前 mongo 1.45M 条 queryData 仍是 12 位混存（4G IMEI 数字 / LAN MAC hex），
+                            //    Node 端 client.run() 阶段 12→15 位 pad 兼容（v4 上报统一 15 位）
+                            //    +0.5 人天 data migration（server 端估时）
+                            //    详细：.harness/docs/discovery/2026-06-15-server-contract-audit.md §1.1
+  imei: string            // 15 位完整 IMEI（新增，主键来源；跟 mac 字段值相同 4G/2G/NB 设备）
   imsi: string            // SIM 卡 IMSI（新增）
   iccid: string           // SIM 卡 ICCID（现有）
   pid: string             // 设备型号（现有）
@@ -1066,6 +1070,94 @@ AT+GSLQ      ← 信号强度（基础健康检查）
 >
 > 这跟 `uart-pesiv-node` 设计哲学反着——pesiv 是**单设备**，没有这种"重连"问题。UartNode 是**多设备长跑**，这个能力**必须**。
 
+### 11.4 queryData payload 设计（**v1.5 新增 — MongoDB schema 校准**）
+
+> **来源**：进 `mongodb://uart-server.taile0f311.ts.net:27017/UartServer` 采样 1.45M 条 `log.queryData`（2026-06-08 ~ 2026-06-15），
+> 配合 server 端 agent (`mvs_56d1e88710c04497a9ec70b8a95fa52b`) 5 答 v1 + 5 答 v2 全 ✅ 验证。
+> 完整 audit：`.harness/docs/discovery/2026-06-15-server-contract-audit.md`（620 行 + 12 条约束锁 + grep 行号索引）
+
+#### 11.4.1 一次完整查询周期的 payload 结构（**1 queryResult = 1 queryData**）
+
+```
+server 端: 生成 queryObject(content: N 个指令名) → emit('query') 给 node
+node 端:   顺序执行 N 条指令（写设备 + 等响应）
+           合并 N 个 IntructQueryResult → 1 个 queryResult 上报
+server:    INSERT log.queryData 1 条 (TTL 7 天)
+```
+
+#### 11.4.2 字段语义（**v1.5 校准 — 跟 server 真实数据对齐**）
+
+| 字段 | 类型 | 语义 | 验证 |
+|---|---|---|---|
+| `timeStamp` | number (ms) | server emit queryObject 时 `Date.now()`（`socket-io.service.ts:445`） | ✅ |
+| `mac` | string (12→15 位) | 设备主键（v4 上报统一 15 位，部署期兼容 12 位混存） | ✅ |
+| `type` | number | **物理层接口**（232=RS232 / 485=RS485），**不是协议名** | ✅ |
+| `protocol` | string | **协议层协议名**（Pesiv卡 / SL6200-TH-LDS / ...），跟 type 维度正交 | ✅ |
+| `mountDev` | string | 挂载设备名 | ✅ |
+| `pid` | number | 设备地址，跟 type 强相关 | ✅ |
+| `content` | `string \| string[]` | **server→node 协议指令名**（不是 modbus 帧 / 设备业务数据），Pesiv 协议只配 1 条指令退化成单 string | ✅ |
+| `Interval` | number (ms) | **下次查询间隔** = server `Math.max(Interval, mountDev.minQueryLimit ?? 0)`（`socket-io.service.ts:254/279`）| ✅ |
+| `useTime` | number (ms) | **本次查询总耗时** = N 条子指令 `useTime.reduce(sum)`（`client.ts:375`） | ✅ |
+| `useBytes` | number | **本次查询总字节数** = N 条子指令 `useByte.reduce(sum)`（`client.ts:376`）| ✅ |
+| `time` | string | **人类可读格式**（`"Mon Jun 08 2026 20:12:39 GMT+0800..."`），**不是 ISO 8601**，原样透传 | ✅ |
+| `contents` | `Array<{ content, buffer, useTime, useByte }>` | **设备响应字节**（`buffer.data: number[]`）+ 每条指令 echo content + 单条统计 | ✅ Mixed 兜底 |
+
+#### 11.4.3 content / contents 字段语义（**v1.5 关键纠正**）
+
+**之前猜测（错）**：
+- `content`（顶层 array of hex）= modbus RTU 请求帧 / 设备业务数据
+- `contents[].buffer.data` = 设备响应字节
+
+**server 端答（对）**：
+- **`queryData.content` = server 端生成的「协议指令名」**（`socket-io.service.ts:439` emit 给 node；`uart.d.ts:603` 注释「查询指令」）
+- **`queryData.contents[].buffer.data` = 设备响应的真实业务字节**（`dev.parse.processor.ts:595` 落库）
+- UartNode 端 `client.ts:375-406` 把每条响应的 buffer 收集起来组 `contents[]` 上报
+
+**Pesiv 卡特例**（`content: 'pesiv'` string 形式）：
+- **非 modbus 路径**——`node.controller.ts:213` 触发 Pesiv 分支
+- **仍走 queryData 上报**——`node.controller.ts:186` 在 Pesiv 判断前 INSERT `log.queryData`（mongo 26 万条占 19%）
+- 解析走 `dev.parse.processor.ts:480` `isPesivProtocol` 分支
+- v4 RFC §11.4 **无需 Pesiv 分支设计**（payload 完全通用）
+
+#### 11.4.4 contents[] 是 Mixed 兜底写入（**非 schema 权威**）
+
+**关键事实**（server 端答 v2 Q2）：
+- `QueryDataLog` schema（`log.ts:600-654`）**没有** `contents[]` 字段
+- 但 `result?: Schema.Types.Mixed` 兜底 + mongoose 全局 `strict: true` 默认 + typegoose `allowMixed: 0`（`log.ts:602`）→ **`contents[]` 整条透传进 create() 落库**
+- `globalThis.fetch` 全局 strict 不影响 Mixed 字段
+
+**v4 RFC §11.4 设计原则**：
+- ✅ Node 端 v4 上报时**显式带** `contents[]`（server 端继续 Mixed 兜底存）
+- ❌ **别假设** server 端类型/校验（schema 没声明）
+- 📝 **长期**：RFC 002 实施时把 `contents[]` 加到 `QueryDataLog` schema 显式字段（10 commit 拆解的第 2 个）
+- 📝 **命名细节**：顶层 `useBytes`（**复数**）/ `contents[].useByte`（**单数**）—— 命名不一致原样透传，不规范化
+
+#### 11.4.5 完整约束锁（**12 条 ✅ 验证**）
+
+| # | 约束 | 权威代码位置 |
+|---|---|---|
+| 1 | `queryData.content` = server→node 协议指令名 | `socket-io.service.ts:439` |
+| 2 | `queryData.contents[].buffer.data` = 设备响应字节 | `dev.parse.processor.ts:595` |
+| 3 | `queryData.useBytes/useTime` = N 条累加 | `client.ts:375-376` |
+| 4 | `queryData.Interval` = server Math.max 算的下次间隔 | `socket-io.service.ts:254` |
+| 5 | `queryData.timeStamp` = server emit 时 Date.now() | `socket-io.service.ts:445` |
+| 6 | `contents[]` Mixed 兜底写入 | `log.ts:602` typegoose allowMixed:0 |
+| 7 | `log.queryData` TTL 7 天 | `log.ts:608` |
+| 8 | `type` = 物理接口, `protocol` = 协议名, 维度正交 | `node.controller.ts:213` + `socket.controller.ts:245` |
+| 9 | `log.dtubusy` = 审计持久化层（**不**主动 emit socket） | `node.socket.controller.ts:432-444` |
+| 10 | `Node.minQueryLimit` = interval floor (Math.max) | `socket-io.service.ts:254/279` |
+| 11 | `dev.register.minQueryLimit` 字段**不存在**（是 NodeRegister 字段） | `mongo_entity/node.ts:302-303` |
+| 12 | Pesiv 卡走 queryData 同一上报路径 | `node.controller.ts:186` 写库在 Pesiv 判断前 |
+
+#### 11.4.6 设计决策（**v4 RFC 必落实**）
+
+1. **TypeScript 类型定义**：`src/protocol/events.ts` 新增 `queryObject` / `queryResult` / `IntructQueryResult` 三个类型，从 `uart` namespace 镜像过来（保持跟 server 端 uart.d.ts 字段名一致）
+2. **payload 兼容**：Node 端 v4 上报 payload 跟 §11.4.2 字段表**完全对齐**——14 字段（含 createdAt / __v 不上报）全 optional 加新字段，老字段保留
+3. **content 多态**：`string | string[]` 都要支持，Pesiv 卡 string 路径跟 4G array 路径**同一上传函数**
+4. **contents[] Mixed 兜底**：v4 上报时**显式带** contents[]，但**别假设** server 端 schema 校验
+5. **5min dtuAlert 去重**：§12.4 dtuAlert 上报 5 分钟内同 mac+type+message 不重推（**跟 server 端对齐**——server 端 `socket-io.service.ts` 已经有 30s 同 mac+pid 去重 + 5s 最小查询间隔）
+6. **Pesiv 自动注册**：保留 server 端 `socket.controller.ts:235-250` 自动注册路径，Node 端**不**做特殊处理
+
 #### 11.6.1 设计原则（**两项拍板**）
 
 | 决策点 | 选择 | 理由 |
@@ -1074,6 +1166,13 @@ AT+GSLQ      ← 信号强度（基础健康检查）
 | Node 拿 cache 方式 | **主动 GET 拉取**（`api-pull`）| Node 启动 / DTU 重连时 GET，简单可控；**不走 Socket.IO push**（不跟 server 端 registerSuccess 流程耦合）|
 | Cache 存储位置 | **server 端**（`uart-server` mongo）| 单点权威，Node 进程重启不丢；多 node 共享 |
 | Cache 失效触发 | **DTU 主动上报** profile 变更事件 | AT+FCLR / AT+RELD / AT+UART=1 写操作 → Node 立刻 POST 通知 server invalidate |
+
+**server 端 query 调度 floor**（**2026-06-15 v1.5 校准**）：
+- `Node.minQueryLimit`（`mongo_entity/node.ts:302-303`，**default 1000ms**）是 server 端 `Math.max(Interval, mountDev.minQueryLimit ?? 0)` 的 floor（`socket-io.service.ts:254/279`）
+- **Node 端 `client.run()` 任意间隔都可以**，server Math.max 兜底，**不强制** ≥15s
+- v4 建议 Node 端**尊重这个 floor**——频繁 AT 查询触发 DTU 卡顿
+- ⚠️ **不要假设 `dev.register.minQueryLimit` 字段存在**——我之前看错 collection，**该字段在 NodeRegister 不在 dev.register**
+- 详细：`.harness/docs/discovery/2026-06-15-server-contract-audit.md` §3.2 Q4
 
 **为什么不用时间过期（`cache-timestamp`）？**
 
@@ -1457,6 +1556,52 @@ type AlertType =
 
 **`dtuState` 乱序事件处理**（**cairui 拍板**）：server 端按 `mac` 做 **latest-wins 覆盖写**——同一 mac 后到的状态覆盖前到的，不维护事件流。
 
+#### 12.4.1 dtuState 链路（**v1.5 校准 — dtubusy 审计层**）
+
+> **来源**：server 端 agent v2 答 Q3 + MongoDB `log.dtubusy` 515,702 docs 采样。
+> 详细：`.harness/docs/discovery/2026-06-15-server-contract-audit.md` §1.2 + §3 Q3
+
+**两条独立链路**（**不冲突不重用**）：
+
+| 链路 | 数据源 | 用途 | server 端行为 |
+|---|---|---|---|
+| **dtubusy**（审计层）| `log.dtubusy` collection | node 端发 `busy(mac, busy, n)` Socket.IO 事件 → server 落库 | **不**主动 emit socket 推前端；前端走 `getDtuBusy(mac, start, end)` **主动 query** |
+| **dtuState**（v4 新增）| server 状态机 | 状态转换实时事件 | server 端 latest-wins 覆盖写 + Socket.IO emit `dtuState` |
+
+**链路流程**（`node.socket.controller.ts:432-444`）：
+
+```
+node 端: busy(mac, busy, n) Socket.IO 事件
+   ↓
+server 端（两个并发）:
+  ├── 控制层: redisService.addDtuWorkBus/delDtuWorkBus(mac)  ← 影响 query 调度
+  └── 审计层: logDevBusyService.save({mac, stat, n, timeStamp})  ← batch.write.service.ts:346 addLogDtuBusy
+                                                              （**批量写**）
+```
+
+**v4 设计原则**：
+- ✅ Node 端 `dtuState` 事件**仅**走状态机维度（不读 `log.dtubusy`）
+- ✅ Node 端上报 dtuInfo 时**不**带 dtubusy 字段（不耦合）
+- ✅ server 端前端要拿 dtubusy 数据**主动 query**，不依赖 v4 dtuState 事件
+- ❌ **不要**把 dtubusy 当 dtuState 数据源（语义错配：dtubusy 是「我忙」，dtuState 是「我活了/死了」）
+
+#### 12.4.2 dtuAlert payload 内容来源（**v1.5 校准 — 触发位置明确**）
+
+| 4 个 AlertType | 触发位置 | v4 RFC 章节 |
+|---|---|---|
+| `AT_TIMEOUT` | `client.run()` 连续 3 次 AT 查询超时 | §3.7.4 + §11.3 |
+| `INVALID_REGISTER` | sniff register 包解析失败（mac: null） | §3.7.4 |
+| `PROFILE_CACHE_FAIL` | `/api/node/dtu-info-cache` GET/POST 连续 5 次失败 | §11.6 + §3.7.4 |
+| `FATAL` | 进程级 fatal（main.ts catch，mac: null） | §3.7.4 + main 兜底 |
+
+**`mac: null` 语义**：server 端收到 `mac: null` 时**不**做 dtuState latest-wins 覆盖（DTU 还没识别），仅落审计日志。
+
+#### 12.4.3 FATAL 走 dtuAlert（**v1.4 拍板保留**）
+
+> cairui 2026-06-15 拍板：FATAL 走 dtuAlert（`type: 'FATAL'`），**不**抽 alarm 模块——避免引入额外鉴权 / 通知通道依赖
+> server 端 agent 反馈：4 个 alert 值锁，message 字段 Node 端拼 `[<layer>] <context>: <what>: <why>`，server 端**不**解析 message（仅审计）
+> 详细：`.harness/docs/server-api-alignment.md` §4.3
+
 ### 12.5 重连退避（**新机制**）
 
 现状：socket 断了之后**立即**等下一个 socket，**没有退避**——对端恢复后会**瞬间打过来 N 条 SYN**。
@@ -1565,6 +1710,7 @@ describe('Dtu Reconnect Backoff', () => {
 | **v1.2** | 2026-06-15 | §11.6 Profile Cache 复用机制（cache-version + api-pull）| cache-version / api-pull | `a280fac` |
 | **v1.3** | 2026-06-15 | §3.7 错误处理模型（throw + 三级边界）+ §3.8 测试 mock 架构（真实 socket + fetch mock）+ §6.5/6.6 11 个 PR 顺序 + 合并 checklist | error-handling=throw+3-tiers / mock-arch=real-socket+fetch-mock / PR-plan=11-PRs | (本次) |
 | **v1.4** | 2026-06-15 | **cairui 全拍板**——微调 §3.7.4（FATAL 走 dtuAlert 不抽 alarm）+ §12.4（dtuAlert 4 个值 + AlertType 枚举）+ §11.6（mac 主键 = 15 位 IMEI + LAN `mac:` 前缀）| deployment-path=C / mac-primary=15 / alert-types=4 / decision-date=2026-06-15 | (本次) |
+| **v1.5** | 2026-06-15 | **MongoDB schema 真实校准**——进 `mongodb://uart-server.taile0f311.ts.net:27017/UartServer` 采样 1.45M 条 + server agent 5 答 v1+v2 锁 12 条约束。§11.2 DtuProfile `mac` 字段修注释（12→15 位 + 部署期兼容说明）/ §11.3 加 server query 调度 floor 标注（minQueryLimit 是 floor 不是硬节流）/ **§11.4 queryData payload 设计** 新增章节（content 是协议指令名 / contents[].buffer.data 是设备响应字节 / Mixed 兜底标注 / 12 条约束锁）/ §12.4 加 dtuState 链路明确（dtubusy 是审计层不是 socket 推源 / 两条独立链路）/ §12.4.1 + §12.4.2 + §12.4.3 子节补完 | mongodb-reality-check / queryData-payload-aligned / dtubusy-audit-only / FATAL-dtuAlert-retained | (本次) |
 
 **v1.3 增量**：
 - **错误处理**：业务层 throw（`DTUError` / `NetworkError` / `ProtocolError` 三类），边界层 catch + console 分级，顶层 main 兜底。**不引** neverthrow / fp-ts，跟 pesiv 一致
@@ -1579,7 +1725,21 @@ PR #11 完成后，本 RFC 状态从 `draft` → `implemented`。同步：
 
 - [ ] 顶部状态表 `状态` 字段改为 `implemented`
 - [ ] 顶部状态表 `日期` 字段保留为 v1.0 日期
-- [ ] §14 CHANGELOG 加 v1.4 行（`status: implemented` + PR #11 commit hash）
+- [ ] §14 CHANGELOG 加 v1.5 行（`status: implemented` + PR #11 commit hash）
 - [ ] `.harness/docs/INDEX.md` 把"待 review"标改成"已落地"
 - [ ] 根 `AGENTS.md` 移除已修掉的"NODE_ENV 残留 / Cache.ts 死代码"两条
 - [ ] 根 `README.md` 架构表改成 5 层分包版
+
+## 16. v1.5 落地 action items（**cairui D 拍板后**）
+
+| # | 事项 | 状态 | 备注 |
+|---|---|---|---|
+| 1 | §11.2 DtuProfile `mac` 字段注释修（12→15 位 + 部署期兼容）| ✅ done | 本次 commit |
+| 2 | §11.3 minQueryLimit floor 标注 | ✅ done | 本次 commit |
+| 3 | §11.4 queryData payload 设计新增章节（6 子节）| ✅ done | 本次 commit |
+| 4 | §12.4 dtuState 链路明确（dtubusy 审计层 + 两条独立链路）| ✅ done | 本次 commit |
+| 5 | §12.4.1 / §12.4.2 / §12.4.3 子节补完 | ✅ done | 本次 commit |
+| 6 | §14 CHANGELOG 加 v1.5 行 | ✅ done | 本次 commit |
+| 7 | §15 §16 状态同步 + 落地清单 | ✅ done | 本次 commit |
+| 8 | server agent 同步 v1.5 增删 | ⏸️ 待发 | v1.5 是 UartNode RFC 文档，**server 不直接读**，server agent 只需知道对齐点（`content` 字段 / `minQueryLimit` 字段位置）|
+| 9 | server repo audit 镜像（C 拍板后）| ⏸️ 等 cairui 答 server agent | 不阻塞 v1.5 commit |
