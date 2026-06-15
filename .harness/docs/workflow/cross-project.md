@@ -127,9 +127,12 @@ UartNode 走的 HTTP 接口：
 - ❓ RFC 001 落地后，**server 端需要接受 `mac:` 前缀的 deviceId**（mac 命名空间）—— 同样要对齐
 - ❓ socket.io-client 版本同步：`uart-pesiv-node` 升 4.7.5+ 后 UartNode 这边要 verify
 - ❓ bun 版本对齐：UartNode 当前 `bun.lock` 锁的版本跟 `uart-pesiv-node` 是否一致——需要时再对
+- ❓ **RFC 002 落地前**：server 端 3 个新 HTTP 接口（`/dtu-info-cache` GET/POST/invalidate）+ `dtuProfileCache` mongo collection + 3 个新 Socket.IO 事件（`dtuState` / `dtuHealth` / `dtuAlert`）—— 完整接口契约见 [`.harness/docs/server-api-alignment.md`](../server-api-alignment.md)
+- ❓ **现状 gap**：`/api/node/dtuinfo` / `queryData` / `nodeInfo` 在 server 端新架构（`uartserver-ng` Fastify）**还没迁**——切 server 端架构会断 UartNode v3.3.0 当前调用
 
 ## 5. 跨项目沟通通道
 
 - `uart-pesiv-node` —— **cairui 自己管**，没有独立 agent
-- `midwayuartserver` —— `agent-ae682922673b`（server 端 worker）
+- `midwayuartserver` / `uartserver-ng` —— `agent-ae682922673b`（server 端 worker）
 - 跨项目协调走 cairui 拍板
+- **RFC 002 跨项目契约**：[`../server-api-alignment.md`](../server-api-alignment.md) — 给 server 端 agent 看的接口文档

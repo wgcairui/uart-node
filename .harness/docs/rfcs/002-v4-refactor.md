@@ -368,7 +368,258 @@ export class CellularSniffer implements ProtocolSniffer {
 - `CellularSniffer.match` 单独可测（不用起 net.Server）
 - `CellularRegisterHandler.handle` 单独可测（mock socket）
 
-## 4. 类型与 lint 收紧
+### 3.7 错误处理模型（**cairui 拍板**）
+
+> 现状问题：
+> - `client.ts:282-285` query 失败直接 `console.log` 走人，**不重试、不上报**——上层完全不知道
+> - `client.ts:435` `OprateParse` 错误响应**只在 message 里写"操作失败"**——server 端拿到 msg 字符串才能判断
+> - `fetch.ts:60` HTTP 失败**catch 完就 return err**——调用方不区分是网络错还是 5xx
+> - `TcpServer.ts:73-79` 推 AT 失败**没有反馈**——DTU 收没收到完全黑盒
+>
+> 跟 `uart-pesiv-node` 对齐的策略：**业务层 throw + 边界层 catch + console 分级**——**不引** neverthrow / fp-ts。
+
+#### 3.7.1 错误分类（**所有 service / dtus 共享**）
+
+```ts
+// src/util/errors.ts（新文件）
+/** 错误分类 —— 用 instanceof + 类型守卫，**不**用枚举/字符串码 */
+export class DTUError extends Error {
+  constructor(
+    message: string,
+    public readonly code: 'AT_TIMEOUT' | 'AT_PARSE_FAIL' | 'SOCKET_CLOSED' | 'INVALID_REGISTER' | 'PROFILE_CACHE_FAIL',
+    public readonly cause?: unknown
+  ) { super(message); this.name = 'DTUError' }
+}
+
+export class NetworkError extends Error {
+  constructor(
+    message: string,
+    public readonly code: 'HTTP_5XX' | 'HTTP_4XX' | 'FETCH_TIMEOUT' | 'CONN_REFUSED',
+    public readonly status?: number,
+    public readonly cause?: unknown
+  ) { super(message); this.name = 'NetworkError' }
+}
+
+export class ProtocolError extends Error {
+  constructor(
+    message: string,
+    public readonly code: 'BAD_REGISTER_PACKET' | 'BAD_AT_RESPONSE' | 'BAD_SOCKET_FRAME' | 'WRONG_SNIFF',
+    public readonly cause?: unknown
+  ) { super(message); this.name = 'ProtocolError' }
+}
+```
+
+**为什么不引 neverthrow / fp-ts**：
+- 跟 pesiv 完全一致（pesiv 也是纯 throw + console）
+- 不引新依赖
+- 业务代码不复杂到需要 Result 链式调用
+- catch 边界明确（uploader / main），不会"异常飘到不该去的地方"
+
+#### 3.7.2 错误处理策略（**三级**）
+
+| 层级 | 策略 | 日志级别 | 例子 |
+|---|---|---|---|
+| **业务层**（service / dtus）| **throw**（不 catch，让调用方决定）| — | `if (!res.ok) throw new NetworkError('HTTP ${res.status}', 'HTTP_5XX', res.status)` |
+| **边界层**（uploader / io-client / dtu.handleQuery）| **catch + 重试 / 降级 / 上报** | `console.warn`（可恢复） / `console.error`（不可恢复）| `uploader.ts` catch → 指数退避重试 → 超过 max 改 console.error |
+| **顶层**（main.ts）| `main().catch(err => { console.error; process.exit(1) })` | `console.error` | 启动失败立即退出（fail fast）|
+
+**关键模式**：
+
+```ts
+// src/dtus/cellular.ts（伪代码）
+class CellularDtu extends Dtu {
+  async queryAT(content: string, timeoutMs = 5000): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new DTUError(`AT timeout: ${content}`, 'AT_TIMEOUT'))
+      }, timeoutMs)
+      this.socketsb!.write(Buffer.from(`+++AT+${content}\r`), /* lock */ true)
+        .then(({ buffer }) => {
+          clearTimeout(timer)
+          const parsed = tool.ATParse(buffer)
+          if (!parsed.AT) {
+            return reject(new DTUError(`AT failed: ${content}`, 'AT_PARSE_FAIL', parsed))
+          }
+          resolve(parsed.msg)
+        })
+        .catch(err => {
+          clearTimeout(timer)
+          reject(new DTUError(`AT write failed: ${content}`, 'SOCKET_CLOSED', err))
+        })
+    })
+  }
+
+  // 上层批量调用 —— 业务层不 catch，让一个失败**记录**不阻塞其它
+  async refreshIdentity() {
+    const queries = ['PID', 'IMEI', 'ICCID', 'IMSI', 'GSLQ']
+    const results = await Promise.allSettled(queries.map(q => this.queryAT(q)))
+    results.forEach((r, i) => {
+      if (r.status === 'fulfilled') {
+        Object.assign(this.profile, { [queries[i]!]: r.value })
+      } else {
+        // 边界层 catch: 记录 + 继续
+        console.warn(`[dtu ${this.mac}] ${queries[i]} failed: ${r.reason.message}`)
+        this.health.consecutiveFailures++
+      }
+    })
+  }
+}
+```
+
+#### 3.7.3 错误信息规范化
+
+**所有错误信息格式**：
+
+```
+[<layer>] <context>: <what>: <why>
+```
+
+例子：
+- `[dtu 98D863CC870D] AT timeout: AT+IMEI: 5000ms`
+- `[uploader] /queryData failed: HTTP 500: 1st attempt, retrying`
+- `[io] connect_error: server rejected: NODE_TOKEN invalid`
+- `[tcp-server] sniff fail: first 9 bytes = "GET / HTTP", not register&`
+
+**好处**：
+- `grep` 容易（`<layer>]` 开头）
+- 包含 context（mac / path / event）便于排查
+- 包含 why（不只说"失败"）
+
+#### 3.7.4 错误上报到 server
+
+**4 类错误主动上报**（不发就只在本地 log）：
+
+| 错误 | 上报事件 | Payload |
+|---|---|---|
+| `AT_TIMEOUT`（连续 3 次）| `EVENT.dtuAlert` | `{ mac, type: 'AT_TIMEOUT', code, message }` |
+| `INVALID_REGISTER`（非注册包连接）| `EVENT.dtuAlert` | `{ mac: null, type: 'INVALID_REGISTER', remoteAddr, firstPacket }` |
+| `PROFILE_CACHE_FAIL`（连续 5 次拉失败）| `EVENT.dtuAlert` | `{ mac, type: 'PROFILE_CACHE_FAIL' }` |
+| 业务 fatal（main.ts 兜底）| `EVENT.alarm` | `{ type: 'FATAL', message, stack }` |
+
+**为什么用 `EVENT.dtuAlert` 而不是 HTTP**：跟现有 `dtuAlert` 事件对齐（§12.4）—— server 端已经规划。
+
+### 3.8 测试 mock 架构（**cairui 拍板**）
+
+> 现状问题：
+> - UartNode 0 个 spec（AGENTS.md 已记）
+> - `TcpServer.ts` / `socket.ts` / `client.ts` 整套 net 逻辑**没在生产跑过**——必须靠单测保护
+> - 但 `net.Socket` 不容易 mock（事件多、状态异步）
+>
+> 跟 `uart-pesiv-node` 对齐的策略：**真实 socket + 0 端口**（用于测试 server）+ **`mock()` 覆盖 globalThis.fetch**（用于测试 HTTP）——**不引** sinon / nock / msw。
+
+#### 3.8.1 三层 mock 工具
+
+```ts
+// test/util/wait-for.ts（公用）
+/** 等到 predicate 为 true，或超时抛错 */
+export async function waitFor(predicate: () => boolean, timeoutMs = 1000, intervalMs = 5): Promise<void> {
+  const start = Date.now()
+  while (Date.now() - start < timeoutMs) {
+    if (predicate()) return
+    await new Promise(r => setTimeout(r, intervalMs))
+  }
+  throw new Error(`waitFor timeout after ${timeoutMs}ms`)
+}
+
+// test/util/fetch-mock.ts（公用 —— 直接抄 pesiv uploader.test.ts）
+import { mock } from 'bun:test'
+
+type FetchBehavior = 'ok' | (status: number) => Response
+
+export function installFetchMock(opts: {
+  behavior?: FetchBehavior
+  delayMs?: number
+  onCall?: (url: string, init?: RequestInit) => void
+} = {}) {
+  const calls: Array<{ url: string; init?: RequestInit }> = []
+  const realFetch = globalThis.fetch
+  ;(globalThis as { fetch: typeof fetch }).fetch = mock(async (input, init) => {
+    const url = typeof input === 'string' ? input : input.toString()
+    calls.push({ url, init })
+    opts.onCall?.(url, init)
+    if (opts.delayMs) await new Promise(r => setTimeout(r, opts.delayMs))
+    if (typeof opts.behavior === 'function') return opts.behavior(0)
+    if (opts.behavior === undefined || opts.behavior === 'ok') {
+      return new Response(null, { status: 204 })
+    }
+    return new Response('boom', { status: 500 })
+  }) as unknown as typeof fetch
+
+  return {
+    calls,
+    restore: () => {
+      ;(globalThis as { fetch: typeof fetch }).fetch = realFetch
+    }
+  }
+}
+
+// test/util/tcp-client.ts（公用 —— 直接抄 pesiv tcp-debug.test.ts）
+import { connect, type Socket } from 'node:net'
+
+/** 客户端连 0 端口（OS 自动分配），Nagle 关闭 */
+export function connectAndNoDelay(port: number, host = '127.0.0.1'): Promise<Socket> {
+  return new Promise((resolve, reject) => {
+    const sock = connect(port, host)
+    sock.once('connect', () => {
+      sock.setNoDelay(true)
+      resolve(sock)
+    })
+    sock.once('error', reject)
+  })
+}
+```
+
+#### 3.8.2 三类 mock 用法
+
+| 测试对象 | 策略 | 为什么 |
+|---|---|---|
+| **uploader** | `installFetchMock()` 覆盖 `globalThis.fetch` | HTTP 是外部 IO，**真实起 server 测会拖慢 + 不可移植** |
+| **io-client** | **真实 socket.io-client 起 0 端口** mock server | Socket.IO 协议复杂，自己 mock 等于重写；0 端口真实 server 跑几 ms 就退出 |
+| **tcp-server / dtus** | **真实 net.Socket 连 0 端口** | 跟 pesiv 一致；TCP 流协议 chunk 边界只有真实 socket 才能测 |
+| **events / uploader / dtu-info / at-parse** | **直接 import + 调纯函数** | 纯函数，0 mock |
+
+#### 3.8.3 测试组织约定
+
+每个 test file 头部注释**必填**：
+
+```ts
+/**
+ * <service> 单元测试
+ *
+ * 测试范围：
+ *   1. <不变量 1>
+ *   2. <不变量 2>
+ *
+ * Mock 策略：
+ *   - fetch: installFetchMock()（覆盖 globalThis.fetch）
+ *   - Socket: 真实 net.Socket 连 0 端口
+ *   - 纯函数: 直接 import
+ *
+ * 注意事项：
+ *   - <任何非显然的坑>
+ */
+```
+
+#### 3.8.4 覆盖率门槛
+
+**Phase 1 起步**（cairui 拍板 60%）：
+- `config.ts` / `events.ts` / `at-parse.ts` / `dtu-info.ts` 100%
+- `IOClient` / `Uploader` / `Dtu base` 80%+
+- `TcpServer` / `CellularDtu` 60%+（剩余 40% 留给集成测试）
+
+**Phase 2 末尾**：提升到 80%。
+
+**Phase 3 末尾**：稳定在 80%，**剩下的 20% 留给 staging 真机回归**（AGENTS.md 强约束）。
+
+#### 3.8.5 不引的依赖（**cairui 拍板**）
+
+- ❌ `sinon` — bun test 自带 `mock()`
+- ❌ `nock` — 用 `installFetchMock` 就够
+- ❌ `msw` — 跟 `sinon` 一样理由
+- ❌ `jest-mock-extended` — bun test 自带
+- ❌ `testcontainers` — staging 24h 真机回归更直接
+
+
 
 ### 4.1 tsconfig 严格化
 
@@ -489,6 +740,157 @@ export class CellularSniffer implements ProtocolSniffer {
 - 配套 N 个 test file
 
 **不在本次范围**——cairui 没明确说要现在做 LAN。
+
+### 6.5 PR 顺序（**草案**——每个 PR 独立可合并）
+
+> 原则：**PR 之间无强依赖**——前一个 PR 不合，下一个也能开。
+> 这样 cairui review 累的时候可以**先合简单的**（Phase 1），**复杂的留 staging 24h 回归**（Phase 2）。
+
+#### PR #1：`test` 骨架 + `events.ts` + `io-client.ts`（cairui 拍板）
+
+- 加 `test` / `test:watch` / `test:coverage` 脚本
+- 新建 `src/protocol/events.ts`（直接抄 pesiv + UartNode 已有事件名）
+- 新建 `src/services/io-client.ts`（class + factory + lifecycle）
+- 改 `src/IO.ts` **import 路径**（行为不变，**纯重命名**）
+- 新建 `test/protocol/events.test.ts` + `test/services/io-client.test.ts`
+- 不动 `src/TcpServer.ts` / `src/client.ts` / `src/socket.ts`
+
+**验收**：单测过；`bun start` 起来行为 1:1 不变；没改 `package.json` 依赖。
+
+**估时**：1 天。
+
+#### PR #2：`uploader.ts` + `dtu-info.ts` + 配套测试
+
+- 新建 `src/services/uploader.ts`（直接抄 pesiv）
+- 新建 `src/services/dtu-info.ts`（直接抄 pesiv util/node-info.ts）
+- 改 `src/fetch.ts` **复用 uploader**（保留 `fetch.dtuInfo` / `fetch.queryData` / `fetch.nodeInfo` API 表面）
+- 新建 `test/services/uploader.test.ts` + `test/services/dtu-info.test.ts`
+
+**验收**：8 个 describe block 14 个 test 全过；现有行为 1:1；HTTP 行为有重试 + 背压（**改善**）。
+
+**估时**：1-2 天。
+
+#### PR #3：`at-parse.ts` 拆 + `tool.ts` 瘦身
+
+- 新建 `src/services/at-parse.ts`（`tool.ATParse` 拆出来 + 加 Result 类型 + 错误信息规范化）
+- `src/tool.ts` 留下 `NodeInfo`（准备 PR #2 的 dtu-info.ts 拆了之后清空 `tool.ts`）
+- 新建 `test/services/at-parse.test.ts`
+
+**验收**：单测过；`ATParse` 行为 1:1；`tool.ts` 行数 -30%。
+
+**估时**：0.5 天。
+
+#### PR #4：`Dtu` 抽象 + `CellularDtu` 实现（**staging 24h 回归必须**）
+
+- 新建 `src/dtus/base.ts`（抽象基类，queue / timeout / restart 通用）
+- 新建 `src/dtus/cellular.ts`（现状 8 条 AT 查 + 重启策略 + 重连）
+- 改 `src/client.ts` → 改成 `CellularDtu` 继承 `Dtu`（行为 1:1，**纯重写**）
+- 新建 `test/dtus/base.test.ts` + `test/dtus/cellular.test.ts`（mock socket）
+
+**验收**：
+- 单测过
+- **staging 24h 真机回归**（AGENTS.md 强约束）—— DTU 注册包解析 / AT 收发 / 长连接 / 被动断开 / 主动重启
+- 重构后行为 1:1
+
+**估时**：2-3 天（含 24h 回归观察）。
+
+#### PR #5：`TcpServer` class 化 + `register-handler.ts` 拆分（**staging 24h 回归必须**）
+
+- 新建 `src/server/tcp-server.ts`（class + factory + sniffers 数组）
+- 新建 `src/server/register-handler.ts`（`CellularSniffer` + `CellularRegisterHandler`）
+- 改 `src/TcpServer.ts` → 改名 `server/tcp-server.ts`，行为 1:1
+- 新建 `test/server/tcp-server.test.ts` + `test/server/register-handler.test.ts`
+
+**验收**：staging 24h 真机回归（DTU 首次连 / 重连 / 注册包错 / 拒连）。
+
+**估时**：2-3 天（含 24h 回归观察）。
+
+#### PR #6：状态机 + 健康度评分（**staging 24h 回归必须**）
+
+- 新建 `src/dtus/state.ts`（`DtuState` enum + 健康度计算函数 + 转换函数）
+- 集成到 `Dtu` 基类
+- 3 个新 Socket.IO 事件（`dtuState` / `dtuHealth` / `dtuAlert`）—— **需 server 端 agent 协调**
+- 新建 `test/dtus/state.test.ts`（**纯函数**，0 mock）
+
+**验收**：单测过；staging 24h；server 端能收到 `dtuState` / `dtuHealth` 事件。
+
+**估时**：2-3 天（含 24h 回归 + 跨项目协调）。
+
+#### PR #7：AT 采集分层（**server 端接口已就绪**）
+
+- 新建 `src/dtus/profile-cache.ts`（`fetchProfileCache` / `writeProfileCache` / `invalidateProfileCache`）
+- 改 `CellularDtu.initialize`：register 路径上 `GET cache → 命中则只查动态/未命中则全量查 → 写回 server`
+- 加 5 个新单测
+- 改 `src/services/uploader.ts` 加 `invalidateDtuProfileCache` 便捷方法
+- 改 `CellularDtu.onATResponse` 检测 FCLR/RELD/UART=1 响应特征字 → 触发 invalidate
+
+**前置**：server 端 3 个新 HTTP 接口已实现（**§11.6.9 checklist**）。
+
+**验收**：staging 24h；cache 命中时 register 耗时从 ~2s 降到 ~1.5s；version 自增正确。
+
+**估时**：1-2 天。
+
+#### PR #8：tsconfig 严格化 + 类型清理（**重头戏**）
+
+- 打开 `noUnusedLocals` / `noUnusedParameters` / `noImplicitReturns` / `noFallthroughCasesInSwitch` / `exactOptionalPropertyTypes`
+- 修复新代码里冒出来的 unused 变量 + 不一致 return
+- **不修老代码**——保持向后兼容
+
+**验收**：`bun --check` 全绿；老代码（`Cache.ts` / `client.ts` 老部分）保持现状。
+
+**估时**：0.5-1 天。
+
+#### PR #9：清掉 `TcpServer.ts:37, 49` 的 `NODE_ENV` 残留（独立小清理）
+
+- 改成全 env：`process.env.LISTEN_PORT ?? conf.Port ?? config.localport`
+- 配套 1 个 test
+
+**前置**：PR #5（`TcpServer` 已 class 化）后做更顺。
+
+**验收**：单测过；staging 24h（AGENTS.md 强约束这条 net 相关）。
+
+**估时**：0.5 天。
+
+#### PR #10：删 `Cache.ts` 死代码（独立小清理）
+
+- 整文件删
+- 检查没人 import（rg 确认）
+
+**验收**：`bun --check` 全绿；bundle 体积 -55 行。
+
+**估时**：0.1 天。
+
+#### PR #11：README + AGENTS + `.harness/` 同步（**RFC 落地后**）
+
+- README 重写架构图（9 个文件 → 5 层分包）
+- AGENTS.md 加「v4 已落地」状态 + 移除已修掉的"NODE_ENV 残留 / Cache.ts 死代码"
+- `.harness/docs/architecture/source-map.md` 改按 5 层写
+- `.harness/docs/INDEX.md` 同步
+- `.harness/docs/rfcs/002-v4-refactor.md` 状态改 `implemented`
+
+**估时**：0.5 天。
+
+#### PR 合并顺序建议
+
+| 批次 | PR | 估时 | 阻塞 |
+|---|---|---|---|
+| **第一批**（基础设施）| #1 #2 #3 | 3-4 天 | 无 |
+| **第二批**（核心重构）| #4 #5 | 4-6 天 | 需 staging 24h |
+| **第三批**（增强）| #6 #7 | 3-5 天 | 需 server 端协调 |
+| **第四批**（清理）| #8 #9 #10 #11 | 1-2 天 | 无 |
+
+**总估时 11-17 天**（含 staging 24h 回归观察）。
+
+### 6.6 合并 checklist（**每个 PR 必过**）
+
+- [ ] `bun run typecheck` 全绿
+- [ ] `bun run test` 全绿
+- [ ] `bun run test:coverage` 覆盖率 ≥ 60%（Phase 1 末），≥ 80%（Phase 2 末）
+- [ ] 改动文件清单跟 PR 描述一致（**不夹带**——独立小清理单独 PR）
+- [ ] **不引新 npm 依赖**（除 cairui 拍板）
+- [ ] **不动** `Dockerfile` / `package.json scripts` / tsconfig 的 `module` `moduleResolution` `target` 这几个**会触发 bun build DCE 的字段**
+- [ ] 改 net 那一层（`tcp-server.ts` / `dtus/*.ts` / `socket.ts`）→ 24h staging 真机回归
+- [ ] PR 描述里**明列**改动的 4G 专属行为（如有）+ 验证步骤
 
 ## 7. 验收标准
 
@@ -1232,3 +1634,34 @@ describe('Dtu Reconnect Backoff', () => {
 | 4（可选）| LAN 支持 | 4-5 天 | RFC 001 落地 |
 
 **总估时**（Phase 1-3）：**6-8 天**，覆盖"生产级代码质量 + 丰满设备画像 + 细致生命周期"三个目标。
+
+---
+
+## 14. 完整 CHANGELOG（v1.0 → v1.3）
+
+> 增量更新追踪——给后续 reviewer / 自己一个「v4 演进路径」。
+
+| 版本 | 日期 | 增量 | 拍板项 | commit |
+|---|---|---|---|---|
+| **v1.0** | 2026-06-15 | 草案：5 层分包 + class 化 + 队列化 + 跟 pesiv 对齐 | refactor-goal=`production-grade` / scope=`move-src-only`+`add-tests`+`add-deps` | (本 RFC 起点) |
+| **v1.1** | 2026-06-15 | §11 AT 采集（15 条 / 两层）+ §12 状态机（8 状态 + health score）| at-medium / sm-medium | `53d2ebb` |
+| **v1.2** | 2026-06-15 | §11.6 Profile Cache 复用机制（cache-version + api-pull）| cache-version / api-pull | `a280fac` |
+| **v1.3** | 2026-06-15 | §3.7 错误处理模型（throw + 三级边界）+ §3.8 测试 mock 架构（真实 socket + fetch mock）+ §6.5/6.6 11 个 PR 顺序 + 合并 checklist | error-handling=throw+3-tiers / mock-arch=real-socket+fetch-mock / PR-plan=11-PRs | (本次) |
+
+**v1.3 增量**：
+- **错误处理**：业务层 throw（`DTUError` / `NetworkError` / `ProtocolError` 三类），边界层 catch + console 分级，顶层 main 兜底。**不引** neverthrow / fp-ts，跟 pesiv 一致
+- **测试 mock**：真实 socket.io-client / 真实 net.Socket（0 端口）+ `installFetchMock` 覆盖 `globalThis.fetch`。**不引** sinon / nock / msw
+- **11 个 PR 顺序**：第一批基础设施（3-4 天）→ 第二批核心重构（4-6 天，staging 24h）→ 第三批增强（3-5 天，跨项目协调）→ 第四批清理（1-2 天）
+
+---
+
+## 15. 状态同步（**RFC 002 落地后**）
+
+PR #11 完成后，本 RFC 状态从 `draft` → `implemented`。同步：
+
+- [ ] 顶部状态表 `状态` 字段改为 `implemented`
+- [ ] 顶部状态表 `日期` 字段保留为 v1.0 日期
+- [ ] §14 CHANGELOG 加 v1.4 行（`status: implemented` + PR #11 commit hash）
+- [ ] `.harness/docs/INDEX.md` 把"待 review"标改成"已落地"
+- [ ] 根 `AGENTS.md` 移除已修掉的"NODE_ENV 残留 / Cache.ts 死代码"两条
+- [ ] 根 `README.md` 架构表改成 5 层分包版
