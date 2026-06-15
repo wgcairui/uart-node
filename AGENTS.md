@@ -21,8 +21,26 @@
 - `TcpServer.ts` / `socket.ts` / `client.ts` 整套 net 逻辑（Bun runtime）**没在生产跑过**。
   改这几个文件后必须 staging 真机回归 24h+，确认 DTU 注册包解析 / AT 指令收发 /
   长连接 keepalive / 被动断开 + 主动重启（`Z` 指令）路径。
+  完整 checklist 见 `.harness/docs/workflow/staging-regression.md`。
 - `bun --check` 之前对 `socket.io-client` 报循环引用卡住过，实际运行没问题。
   **typecheck 不要卡死就当通过**。
+- **`socket.ts:40-42` 的 socket timeout 没 destroy** —— `setTimeout(5min)` 触发后**只打 log**，
+  不主动断开。设计上是给 keepalive 探针兜底，**但要意识到长静默连接不会被回收**。
+  长跑场景下 MacSocketMaps 可能会堆积"僵尸" Client。
+- **`TcpServer.ts:37, 49` 还有 2 处 `NODE_ENV` 模式判断残留** —— commit 6fa4359 修了
+  `config.ts` 但漏了这里。bun build --minify 后 DCE 掉 prod 分支，**`NODE_ENV=production`
+  容器永远走 `config.localport = 9000`，不会走 server 下发的 `conf.Port`**。
+  下次动 `TcpServer.ts` 时**顺手清掉**，改成全 env（参考 `config.ts:1-11`）。
+
+## 当前协议支持范围
+
+- **100% 4G/2G/NB DTU only**（汉枫 HF2411 / HF2111A / HF2611 等）—— `TcpServer` 推 `+++AT+` 仪式、
+  `URLSearchParams` 解析注册包、`client.run()` 批量查 `AT+PID/VER/GVER/ICCID/LOCATE/UART/GSLQ/IOTEN`、
+  `tool.ATParse` 匹配 `+ok` 响应——**4 处硬编码绑死 4G**。
+- **不支持汉枫 LAN 网关**（HF5111 / EE1X / PE1X / Eport 等）—— 没有注册包机制、不响应
+  `+++AT+` 透传穿指令、需要走不同拓扑。
+- **LAN 接入设计在 `.harness/docs/rfcs/001-lan-gateway-support.md`**，等拍板后开工。
+- 协议速查：`.harness/docs/protocols/cellular-4g-dtu.md` + `lan-gateway.md`。
 
 ## 跨项目 reference
 
@@ -38,11 +56,21 @@
 
 ## 已废弃代码
 
-- `Cache.ts` 顶部那段 `ProxyQueryColletion` 批传代码是注释掉的死代码。
-  现在 `pushColletion` 直传 `fetch.queryData(data)`，**不要"优化"成批传** —
-  server 端有 5s 最小查询间隔 + 30s 去重，客户端批传反而会丢数据。
+- `Cache.ts` 整文件是**死代码**（没人 import，`pushColletion` 没人调）。
+  顶部 `ProxyQueryColletion` 批传是注释掉的死代码；
+  `pushColletion` 即便被调也只走 `fetch.queryData(data)`，**不会批传**。
+  —— 看到有人想"优化"成批传要拦住：server 端有 5s 最小查询间隔 + 30s 去重，
+  客户端批传反而会丢数据。**真要清理就直接删 `Cache.ts`**，不要"补批传逻辑"。
+- **别把 `client.ts:39` 的实例字段 `private Cache: ...[]` 跟 `src/Cache.ts` 搞混**——
+  前者是单 DTU 内部的 FIFO 指令队列（**实际在跑**），后者是文件级死代码。
 
 ## 测试
 
 - **没有测试**。`bun test` 装上了但 0 个 spec。
   **不要凭空加单测框架 / jest 配置** — 加之前先问 cairui。
+
+## 仓库知识库
+
+- 复杂资料（协议速查、代码地图、RFC 草稿、回归 checklist）放 `.harness/docs/`。
+- 起步走 `.harness/docs/INDEX.md`；改 `src/TcpServer.ts` / `socket.ts` / `client.ts` /
+  `tool.ts` 之前**先读** `.harness/docs/workflow/staging-regression.md`。
