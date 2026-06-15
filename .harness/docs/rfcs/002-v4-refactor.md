@@ -487,14 +487,21 @@ class CellularDtu extends Dtu {
 
 #### 3.7.4 错误上报到 server
 
-**4 类错误主动上报**（不发就只在本地 log）：
+**4 类错误主动上报**（**cairui 拍板 2026-06-15：4 个值跟 §12.4 对齐**）：
 
 | 错误 | 上报事件 | Payload |
 |---|---|---|
 | `AT_TIMEOUT`（连续 3 次）| `EVENT.dtuAlert` | `{ mac, type: 'AT_TIMEOUT', code, message }` |
 | `INVALID_REGISTER`（非注册包连接）| `EVENT.dtuAlert` | `{ mac: null, type: 'INVALID_REGISTER', remoteAddr, firstPacket }` |
 | `PROFILE_CACHE_FAIL`（连续 5 次拉失败）| `EVENT.dtuAlert` | `{ mac, type: 'PROFILE_CACHE_FAIL' }` |
-| 业务 fatal（main.ts 兜底）| `EVENT.alarm` | `{ type: 'FATAL', message, stack }` |
+| **FATAL**（main.ts 兜底）| `EVENT.dtuAlert` | `{ mac: null, type: 'FATAL', message, stack }` |
+
+**为什么 FATAL 也走 `dtuAlert`**（**cairui 拍板**：不抽到 `alarm`）：
+- **统一告警通道**——server 端告警系统一个 dtuAlert 事件全接
+- **语义不绝对**——`alarm` 在 server 端是"全 Node 告警"（不是设备），会触发 server-admin 介入；`FATAL` 是**进程级**，但本质上也是"这台 Node 出问题了"，**用 dtuAlert 合理**
+- **5 分钟内同 mac+type+message 去重**（**cairui 拍板**）——server 端加去重，避免 FATAL 重启循环刷屏
+
+**`EVENT.alarm` 留给什么**：**Node 进程级非设备告警**（如启动失败 / 配置错误 / 鉴权拒绝 / 内存 / CPU 异常）——独立通道，不跟设备 dtuAlert 混。RFC 002 **暂不实现** `EVENT.alarm` 上报，留二期。
 
 **为什么用 `EVENT.dtuAlert` 而不是 HTTP**：跟现有 `dtuAlert` 事件对齐（§12.4）—— server 端已经规划。
 
@@ -1037,7 +1044,7 @@ interface DtuProfile {
 
 ```
 AT+PID       ← 型号
-AT+IMEI      ← 完整 IMEI（**取代后 12 位当主键**？还是保留 IMEI 后 12 位 + 完整 IMEI 都上报？）
+AT+IMEI      ← 完整 15 位 IMEI（**主键**——cairui 拍板 2026-06-15）
 AT+ICCID     ← SIM 卡
 AT+IMSI      ← SIM 卡
 AT+GSLQ      ← 信号强度（基础健康检查）
@@ -1045,116 +1052,12 @@ AT+GSLQ      ← 信号强度（基础健康检查）
 
 **5 条**，耗时 ~1-2s。**register 路径上必须完成**才能上报 `terminalOn(mac, forceReport=true)`。
 
-> **关键决策点**：完整 IMEI 15 位要不要取代 IMEI 后 12 位当主键？
-> - **保留 12 位当主键**：最小改动，向后兼容
-> - **改 15 位当主键**：消除 LAN MAC `98D863xxxxxx` 跟某 4G IMEI 后 12 位的潜在碰撞（RFC 001 §6 提到的）
-> - **两个都保留**：后 12 位向后兼容 + 完整 15 位上报字段
+> **关键决策点（已拍板 2026-06-15）**：完整 IMEI **15 位**当主键。
+> - **理由**：消除 LAN MAC `98D863xxxxxx` 跟某 4G IMEI 后 12 位的潜在碰撞（RFC 001 §6 提到的）
+> - **代价**：老数据需要 data migration（server 端 agent 估时 **+0.5 人天**）——mac 字段从 12 位扩展到 15 位
+> - **不保留后 12 位当主键**——`imei` 字段（15 位）和 `macShort` 字段（12 位）都上报，但**主键统一用 15 位**
+> - **LAN 设备主键**：MAC 地址 12 字符（hex 大写），加前缀 `mac:`（`98D863000002` → `mac:98D863000002`）——**两套命名空间不撞**（RFC 001 §6 已定）
 
-#### 第二层：后台动态刷新（**非 register 路径**）
-
-**配置类 / 状态类 / 流量类**——这些不阻塞 register，但 server 端要定时刷新：
-
-```
-AT+VER       AT+GVER       AT+IOTEN      AT+UART=1
-AT+APN       AT+GSMST      AT+LOCATE=1   AT+HEART
-AT+NTIME     AT+DATA=A     AT+DATA=B     AT+DATA=C
-```
-
-**~10 条**，分**两批**在 register 后异步跑：
-
-| 批 | AT 指令 | 频率 | 触发条件 |
-|---|---|---|---|
-| **批 1**（**30s 后跑**）| VER / GVER / IOTEN / UART / APN / GSMST / LOCATE / HEART | register 后 30s 一次（**只跑一次**——配置类不变）| register 完成后 30s |
-| **批 2**（**周期性 60s**）| NTIME / DATA / DATA=A,B,C | 每 60s 跑一次 | 持续运行 |
-
-**实现机制**：
-
-```ts
-// src/dtus/cellular.ts（伪代码）
-class CellularDtu extends Dtu {
-  async initialize() {
-    // 1) 第一层：初始化必查（register 路径，~1-2s）
-    await this.refreshIdentity()           // PID/IMEI/ICCID/IMSI/GSLQ
-    this.io.terminalOn(this.mac, false)   // 上报 terminalOn
-    this.io.uploadDtuInfo(this.profile)
-
-    // 2) 第二层：后台动态刷新（不阻塞）
-    this.scheduleBackgroundRefresh()
-  }
-
-  private async refreshIdentity() {
-    const results = await this.queryAT(['PID', 'IMEI', 'ICCID', 'IMSI', 'GSLQ'])
-    Object.assign(this.profile, results)
-  }
-
-  private scheduleBackgroundRefresh() {
-    // 批 1: 30s 后跑配置类（只跑一次）
-    setTimeout(async () => {
-      const r = await this.queryAT(['VER', 'GVER', 'IOTEN', 'UART=1', 'APN',
-                                    'GSMST', 'LOCATE=1', 'HEART'])
-      Object.assign(this.profile, r)
-      this.io.uploadDtuInfo(this.profile)
-    }, 30_000).unref()
-
-    // 批 2: 每 60s 跑运行时类（持续）
-    const refreshRuntime = async () => {
-      const r = await this.queryAT(['NTIME', 'DATA=A', 'DATA=B', 'DATA=C'])
-      Object.assign(this.profile, r)
-      this.io.uploadDtuInfo(this.profile)
-    }
-    setInterval(refreshRuntime, 60_000).unref()
-  }
-}
-```
-
-### 11.4 上报 schema 演进（**不破坏 server 端**）
-
-server 端 `/api/node/dtuinfo` 当前 payload 是：
-
-```ts
-interface dtuinfoRequest {
-  info: Partial<Terminal & { mac: string; AT; PID; ver; Gver; iotStat; jw; uart; ICCID; signal }>
-}
-```
-
-**演进策略**：新字段**全部 optional**，server 端向前兼容：
-
-```ts
-// v4 payload（增量，不删除）
-interface dtuinfoRequestV4 {
-  info: Partial<Terminal & {
-    // —— 现有 8 字段保持不变 ——
-    mac: string; AT: boolean; PID: string; ver: string; Gver: string;
-    iotStat: string; jw: string; uart: string; ICCID: string; signal: string;
-    // —— 新增 6 字段（全 optional）——
-    imei: string; imsi: string; apn: { name: string; user: string; password: string };
-    network: { status: string; strength: number };
-    clock: { second: number; runTime: number; time: string };
-    traffic: { sockA?: { tx: number; rx: number }; sockB?: { tx: number; rx: number }; sockC?: { tx: number; rx: number } };
-    heartbeat: { time: number; mode: string; type: string; value: string };
-  }>
-}
-```
-
-### 11.5 测试矩阵（**单测 + 集成**）
-
-**单测**（不依赖真实 DTU）：
-- `queryAT` 解析每条 AT 的响应格式
-- `refreshIdentity` 调度逻辑（mock queryAT）
-- `scheduleBackgroundRefresh` timer / unref 行为
-
-**集成**（依赖真实 DTU，staging 24h 回归）：
-- 初始化必查 5 条在 ~1-2s 内完成
-- 30s 后批 1 配置类刷新成功
-- 60s 后批 2 运行时类刷新成功
-- `traffic` 字段的发送/接收字节数随时间增长
-- 重连后第二层 timer 重启（**不能泄漏**）
-
-### 11.6 Profile Cache 复用机制（**新增**——cairui 拍板 `cache-version` + `api-pull`）
-
-> 现状问题（**cairui 反馈**）：
-> > 有些参数如果已经拿到过一次就不需要再拿了，所以需要先向 server 获取一个设备数据详情来看
->
 > 场景：
 > - DTU 5 分钟前刚 register 过，profile 完整（IMEI/IMSI/APN/...）
 > - **UartNode 进程重启**（bugfix / OOM / k8s 滚动升级）
@@ -1188,7 +1091,7 @@ interface dtuinfoRequestV4 {
 ```ts
 // server 端 mongo collection: dtuProfileCache
 interface DtuProfileCache {
-  mac: string                  // IMEI 后 12 位（保留主键）/ 或 15 位（决策见 §11.4）
+  mac: string                  // **cairui 拍板 2026-06-15：15 位 IMEI 主键**（4G/2G/NB 设备）；LAN 设备是 `mac:98D863000002`（加前缀）
   nodeName: string             // 上报的 node 名称
   profile: DtuProfile          // 完整 DtuProfile（14 字段）
   version: number              // 单调递增版本号（每次 invalidate / 更新 +1）
@@ -1532,13 +1435,27 @@ interface dtuInfoV4 {
 }
 ```
 
-**新增 3 个 Socket.IO 事件**（跟 cairui / server 端 agent 对齐）：
+**新增 3 个 Socket.IO 事件**（跟 cairui / server 端 agent 对齐，**cairui 拍板 2026-06-15**）：
 
-| 事件 | 触发 | Payload |
-|---|---|---|
-| `dtuState` | 每次状态转换 | `{ mac, from, to, score, reason }` |
-| `dtuHealth` | 每 60s | `{ mac, score, health }` |
-| `dtuAlert` | 严重降级 / 病危 | `{ mac, score, reason }` |
+| 事件 | 触发 | Payload | 类型 |
+|---|---|---|---|
+| `dtuState` | 每次状态转换 | `{ mac, from: DtuState, to: DtuState, score: number, reason: string, timestamp: number }` | 状态机 |
+| `dtuHealth` | 每 60s（ONLINE / DEGRADED 才发）| `{ mac, score, health: DtuHealth, timestamp: number }` | 周期上报 |
+| `dtuAlert` | 4 类错误触发（**cairui 拍板 2026-06-15**）| `{ mac: string \| null, type: AlertType, message: string, context?: Record<string, unknown>, timestamp: number }` | 告警 |
+
+**`AlertType` 枚举**（**cairui 拍板 4 个值**）：
+
+```ts
+type AlertType =
+  | 'AT_TIMEOUT'         // §3.7.4: AT 连续 3 次超时
+  | 'INVALID_REGISTER'   // §3.7.4: 非注册包连接（mac: null）
+  | 'PROFILE_CACHE_FAIL' // §3.7.4: profile cache 拉/写连续 5 次失败
+  | 'FATAL'              // §3.7.4: 进程级 fatal（main 兜底，mac: null）
+```
+
+**server 端去重**（**cairui 拍板**）：5 分钟内同 `mac + type + message` 不重推——避免 FATAL 重启循环刷屏。
+
+**`dtuState` 乱序事件处理**（**cairui 拍板**）：server 端按 `mac` 做 **latest-wins 覆盖写**——同一 mac 后到的状态覆盖前到的，不维护事件流。
 
 ### 12.5 重连退避（**新机制**）
 
@@ -1647,6 +1564,7 @@ describe('Dtu Reconnect Backoff', () => {
 | **v1.1** | 2026-06-15 | §11 AT 采集（15 条 / 两层）+ §12 状态机（8 状态 + health score）| at-medium / sm-medium | `53d2ebb` |
 | **v1.2** | 2026-06-15 | §11.6 Profile Cache 复用机制（cache-version + api-pull）| cache-version / api-pull | `a280fac` |
 | **v1.3** | 2026-06-15 | §3.7 错误处理模型（throw + 三级边界）+ §3.8 测试 mock 架构（真实 socket + fetch mock）+ §6.5/6.6 11 个 PR 顺序 + 合并 checklist | error-handling=throw+3-tiers / mock-arch=real-socket+fetch-mock / PR-plan=11-PRs | (本次) |
+| **v1.4** | 2026-06-15 | **cairui 全拍板**——微调 §3.7.4（FATAL 走 dtuAlert 不抽 alarm）+ §12.4（dtuAlert 4 个值 + AlertType 枚举）+ §11.6（mac 主键 = 15 位 IMEI + LAN `mac:` 前缀）| deployment-path=C / mac-primary=15 / alert-types=4 / decision-date=2026-06-15 | (本次) |
 
 **v1.3 增量**：
 - **错误处理**：业务层 throw（`DTUError` / `NetworkError` / `ProtocolError` 三类），边界层 catch + console 分级，顶层 main 兜底。**不引** neverthrow / fp-ts，跟 pesiv 一致

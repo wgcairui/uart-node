@@ -403,11 +403,13 @@ interface DtuHealthEvent {
 
 ### 4.3 `dtuAlert` — 告警事件
 
+> **cairui 拍板 2026-06-15**：4 个值，跟 RFC 002 §3.7.4 + §12.4 对齐（**`FATAL` 走 dtuAlert，不抽到 `alarm`**）
+
 **Payload**：
 
 ```ts
 interface DtuAlertEvent {
-  mac: string | null               // INVALID_REGISTER 时 mac 未知 → null
+  mac: string | null               // INVALID_REGISTER / FATAL 时 mac 未知 → null
   type: 'AT_TIMEOUT' | 'INVALID_REGISTER' | 'PROFILE_CACHE_FAIL' | 'FATAL'
   message: string                  // 错误信息
   timestamp: number
@@ -420,6 +422,11 @@ interface DtuAlertEvent {
 - `INVALID_REGISTER` 任何时候（非法连接尝试）
 - `PROFILE_CACHE_FAIL` 连续 5 次
 - `FATAL` 任何时候（main 兜底 fatal）
+
+**server 端去重**（**cairui 拍板 2026-06-15**）：
+- **5 分钟内** 同 `mac + type + message` **不重推**
+- 避免 FATAL 重启循环刷屏、AT_TIMEOUT 抖动重复告警
+- 去重状态**仅在内存**（不持久化）——server 进程重启后**首次告警照常发**
 
 **server 端作用**：
 - 推送到告警系统（邮件 / 钉钉 / 飞书）
@@ -508,18 +515,19 @@ UartNode RFC 002 Phase 1-3 落地**之前**，cairui 跟 server 端 agent 同步
   - 3.0-4.5 人天 server 端老 midway + uartserver-ng cairui 排期
   - §5 checklist 已标 ✅/🔄/❌
   - §6 改写为 v2（gap v2 + 部署目标 + 估时表）
+- **2026-06-15 19:50** — **cairui 拍板（全 3 项）**：
+  - **mac 主键 = 15 位 IMEI**（消除 LAN MAC `98D863xxxxxx` 跟 4G IMEI 后 12 位的潜在碰撞；server 端 data migration +0.5 人天）
+  - **dtuAlert type = 4 个值**（`AT_TIMEOUT` / `INVALID_REGISTER` / `PROFILE_CACHE_FAIL` / `FATAL`；FATAL 走 dtuAlert 不抽 alarm；server 端 5min 内同 mac+type+message 去重）
+  - **dtuState 乱序事件 = server 端 latest-wins 覆盖写**（按 mac 做 latest-wins，不维护事件流）
+  - **拍板日期 = 2026-06-15**（server 端 MR 描述 'blocked on cairui decision' 用）
+  - **完整拍板集**（4 个 metadata 数字）：`{ path: 'C', mac: '15', alert: '4', date: '2026-06-15' }`
+  - RFC 002 §11.6（mac 主键决策）/ §12.4（dtuAlert 4 个值）/ §3.7.4（FATAL 走 dtuAlert）已微调 commit
 
-### 待 cairui 补 3 项（**收到后 commit + 回 server 端**）
+**完整拍板结果**（同步给 server 端 agent）：
 
-| # | 项 | 我推 | 状态 |
-|---|---|---|---|
-| 1 | mac 主键 12 位 vs 15 位 IMEI | 15 位（避免 LAN MAC 命名空间冲突）| ⚠️ 待拍 |
-| 2 | dtuAlert type 3 vs 4 个 | 4 个（跟 RFC 002 §12.4 对齐；FATAL 留 dtuAlert，不抽到 alarm）| ⚠️ 待拍 |
-| 3 | 拍板日期 YYYY-MM-DD | `2026-06-15`（今天——server 端 agent 写 MR 描述用）| ⚠️ 待确认 |
-
-> **cairui 拍完这 3 项**后我立刻：
-> 1. 更新 §5/§6 状态
-> 2. 微调 RFC 002 §11.6.6（接口 12 条 modified 项的最终方案）
-> 3. 微调 RFC 002 §12.4（dtuAlert type 枚举最终 3/4）
-> 4. commit + 删 cron + **一次性回 server 端 agent 拍板结果 + 4 个 metadata 数字**
-> 5. 推 PR #1（**不依赖**这 3 项）
+| 项 | 拍板值 | 影响 |
+|---|---|---|
+| 部署路径 | C | 老 midway + uartserver-ng 双轨，3.0-4.5 人天 server 端 |
+| mac 主键 | 15 位 IMEI | server 端 data migration +0.5 人天 |
+| dtuAlert type | 4 个值 | server 端 AlertType 枚举扩展 + 5min 去重 |
+| 拍板日期 | 2026-06-15 | server 端 MR 描述用 |
