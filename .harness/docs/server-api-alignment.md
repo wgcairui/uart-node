@@ -478,24 +478,36 @@ UartNode RFC 002 Phase 1-3 落地**之前**，cairui 跟 server 端 agent 同步
 | `POST /api/node/dtu-info-cache/invalidate` | ❌ 同上 | 同上 |
 | `dtuState` / `dtuHealth` / `dtuAlert` 事件 | ❌ 两套都没实现 | RFC 002 Phase 2 落地前需 server 端支持 |
 
-### 6.2 部署目标（cairui 拍 = **C**）
+### 6.2 部署目标（cairui 拍 = **C**，**含义修正 2026-06-15**）
 
-> **C 路径** = 两套都放，**先老 midway 让 v3.3.0 不掉线**，**uartserver-ng 同步迁移**
+> **C 路径（修正）** = **只老 midway 单轨**（让 v3.3.0 不掉线），**uartserver-ng 是实验项目不参与生产，留作未来迁移备选**
+>
+> **事实修正**：之前 §6.2 描述的"uartserver-ng 同步迁移"是误判——**uartserver-ng 不是生产路径**，cairui 不会同步推。
+> C 路径实际**退化为 A 路径的工作量**（只在老 midway 干），但**仍标记 C**（保留"未来可向 uartserver-ng 迁移"的语义）。
 
 | 阶段 | 任务 | 估时 |
 |---|---|---|
 | **server 端（老 midway）** | 迁移 `/api/node/*` 4 个老接口 + 新增 3 个 `dtu-info-cache` + 1 个 mongo collection + 3 个 Socket.IO 事件 | **3.0-4.5 人天**（server 端 agent） |
-| **server 端（uartserver-ng）** | 同上 + 适配 JWT+role 鉴权 | cairui 排期（待估）|
+| **server 端（uartserver-ng）** | **不参与**（实验项目，留作未来迁移备选） | N/A |
 | **UartNode v4** | RFC 002 Phase 1-3 落地 | 11-17 天（已估） |
 
 **好处**：
 - v3.3.0 不掉线（继续打老 midway）
-- uartserver-ng 重构方向保持（C 路径不"为了快就妥协方向"）
-- 风险最低（两套都通，**v3.3.0 / v4 可以灰度切换**）
+- 估时 3.0-4.5 人天**不变**——活还是那么多，只是 uartserver-ng 这次**不做**
+- 未来若 uartserver-ng 转生产，老 midway 的实现**直接可搬**（老 midway 跟 uartserver-ng 是**两套同源**架构，迁移只是鉴权适配 + 路由前缀改写）
 
 **坏处**：
-- 维护成本翻倍（短期）
-- 鉴权体系**两套并存**期间要明确文档
+- uartserver-ng 这次**不参与**——失去"灰度切换"机会
+- 未来迁移 uartserver-ng 时还要**重新排期**
+
+### 6.3 建议 server 端 agent 优先级（**C 路径修正后**）
+
+1. **最高**：老 midway 迁移 `/api/node/*` + 新增 3 个 dtu-info-cache 接口
+2. **高**：老 midway mongo 加 `dtuProfileCache` collection（**不带 TTL**）
+3. **中**：老 midway 实现 3 个新 Socket.IO 事件（`dtuState` / `dtuHealth` / `dtuAlert`）
+4. **中**：老 midway 适配 `terminals.healthScore` 字段
+5. **~~中~~ → N/A**：~~uartserver-ng 同步迁移以上（cairui 排期）~~ —— **删除此条**（uartserver-ng 不参与生产）
+6. **低**：优化 cache 策略（压缩 / 持久化）
 
 ### 6.3 建议 server 端 agent 优先级
 
@@ -515,6 +527,11 @@ UartNode RFC 002 Phase 1-3 落地**之前**，cairui 跟 server 端 agent 同步
   - 3.0-4.5 人天 server 端老 midway + uartserver-ng cairui 排期
   - §5 checklist 已标 ✅/🔄/❌
   - §6 改写为 v2（gap v2 + 部署目标 + 估时表）
+- **2026-06-15 20:00** — **C 路径含义修正**：server 端 agent 反馈他之前没掌握的事实——**uartserver-ng 是实验项目，不参与生产**。
+  - C 路径**实际退化为"老 midway 单轨"**（活还是那么多，但 uartserver-ng 这次不做）
+  - 估时 3.0-4.5 人天**不变**
+  - §6.2 / §6.3 已修（删除 uartserver-ng 同步迁移任务）
+  - **未来 uartserver-ng 转生产时**：老 midway 的实现**直接可搬**（两套同源架构）
 - **2026-06-15 19:50** — **cairui 拍板（全 3 项）**：
   - **mac 主键 = 15 位 IMEI**（消除 LAN MAC `98D863xxxxxx` 跟 4G IMEI 后 12 位的潜在碰撞；server 端 data migration +0.5 人天）
   - **dtuAlert type = 4 个值**（`AT_TIMEOUT` / `INVALID_REGISTER` / `PROFILE_CACHE_FAIL` / `FATAL`；FATAL 走 dtuAlert 不抽 alarm；server 端 5min 内同 mac+type+message 去重）
