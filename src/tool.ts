@@ -1,7 +1,15 @@
 import os from "os";
 import { type nodeInfo } from "uart";
-export default class tool {
 
+/**
+ * 节点运行时信息（CPU/内存/启动时间/hostname）
+ *
+ * 历史：原 tool.ATParse() 静态方法在 PR #3 拆到 src/services/at-parse.ts（看 §6.5 PR #3）
+ *       原 tool.NodeInfo() 保留——PR #3 RFC 字面「tool.ts 留下 NodeInfo」。
+ *       dtu-info.ts (PR #2) 拆出的 nodeInfo() 函数是新实现，未接管 main.ts 调用方，
+ *       留到后续 PR（PR #4 Dtu 抽象或 PR #5 TcpServer 重构时一起做迁移）。
+ */
+export default class tool {
   /**
    * 节点信息
    */
@@ -22,24 +30,5 @@ export default class tool {
       uptime: uptime.toFixed(0) + "h",
       version: os.version()
     };
-  }
-
-  /**
-   * 处理AT指令结果
-   * @param buffer 
-   */
-  static ATParse(buffer: Buffer | string) {
-    if (Buffer.isBuffer(buffer)) {
-      const str = buffer.toString('utf8')
-      return {
-        AT: /(^\+ok)/.test(str),
-        msg: str.replace(/(^\+ok)/, '').replace(/^\=/, '').replace(/^[0-9]\,/, '')
-      }
-    } else {
-      return {
-        AT: false,
-        msg: ''
-      }
-    }
   }
 }

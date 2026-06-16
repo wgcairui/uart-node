@@ -4,6 +4,7 @@ import config from "./config";
 import IOClient from "./IO";
 import socketsb, { ProxySocketsb } from "./socket";
 import tool from "./tool";
+import { parseATResponse } from "./services/at-parse";
 import fetch from "./fetch";
 import { URLSearchParams } from "url";
 
@@ -196,7 +197,7 @@ export default class Client {
         const queryString = Buffer.from('+++AT+' + content + "\r", "utf-8")
         if (this.socketsb) {
             const { buffer } = await this.socketsb.write(queryString)
-            return tool.ATParse(buffer)
+            return parseATResponse(buffer)
         } else {
             return {
                 AT: false,
@@ -447,7 +448,7 @@ export default class Client {
      */
     private ATParse(Query: DTUoprate, res: socketResult) {
         const { buffer, useTime } = res
-        const parse = tool.ATParse(buffer)
+        const parse = parseATResponse(buffer)
         if (parse.AT && !parse.msg) {
             this.run().then(el => fetch.dtuInfo(el as any))
         }
