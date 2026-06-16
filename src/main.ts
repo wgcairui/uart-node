@@ -1,7 +1,7 @@
 import config, { IO_CONFIG } from "./config"
 import { registerConfig, queryObjectServer, instructQuery, DTUoprate } from "uart"
 import IOClient from "./IO"
-import TcpServer from "./TcpServer"
+import TcpServer from "./server/tcp-server"
 import { nodeInfo } from "./services/dtu-info"
 import fetch from "./fetch"
 
@@ -22,7 +22,7 @@ IOClient
 
         register(data)
     })
-    //断开连接时触发    
+    //断开连接时触发
     .on("disconnect", (reason: string) => {
         /* tcpServer.close()
         tcpServer. */
@@ -30,17 +30,17 @@ IOClient
     // 接受查询指令
     .on(config.EVENT_SOCKET.query, (Query: queryObjectServer) => {
         Query.DevMac = Query.mac
-        tcpServer.Bus('QueryInstruct', Query)
+        tcpServer.bus('QueryInstruct', Query)
     })
 
     // 终端设备操作指令
     .on(config.EVENT_SERVER.instructQuery, (Query: instructQuery) => {
-        tcpServer.Bus('OprateInstruct', Query)
+        tcpServer.bus('OprateInstruct', Query)
     })
 
     // 发送终端设备AT指令
     .on(config.EVENT_SERVER.DTUoprate, async (Query: DTUoprate) => {
-        tcpServer.Bus("ATInstruct", Query as DTUoprate)
+        tcpServer.bus("ATInstruct", Query as DTUoprate)
     })
 
     // 服务器要求发送查询节点运行状态
@@ -63,6 +63,8 @@ function register(data: registerConfig) {
     } else {
         // 根据节点注册信息启动TcpServer
         tcpServer = new TcpServer(data);
+        // PR #5 class 化的 TcpServer 需要显式 listen()（老 TcpServer 构造里隐式 listen）
+        tcpServer.listen().catch(err => console.error('TcpServer listen failed:', err));
     }
     // 等待10秒,等待终端连接节点,然后告诉服务器节点已准备就绪
     setTimeout(() => {
