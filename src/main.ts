@@ -2,7 +2,7 @@ import config, { IO_CONFIG } from "./config"
 import { registerConfig, queryObjectServer, instructQuery, DTUoprate } from "uart"
 import IOClient from "./IO"
 import TcpServer from "./TcpServer"
-import tool from "./tool"
+import { nodeInfo } from "./services/dtu-info"
 import fetch from "./fetch"
 
 let tcpServer: TcpServer
@@ -14,7 +14,7 @@ IOClient
         console.log(`已连接到UartServer:${IO_CONFIG.uri},socketID:${IOClient.id},`);
     })
     .on("accont", () => {
-        IOClient.emit("register", tool.NodeInfo());
+        IOClient.emit("register", nodeInfo());
     })
     // 注册成功,初始化TcpServer
     .on(config.EVENT_SOCKET.registerSuccess, (data: registerConfig) => {
@@ -45,7 +45,7 @@ IOClient
 
     // 服务器要求发送查询节点运行状态
     .on("nodeInfo", async (name: string) => {
-        const node = tool.NodeInfo()
+        const node = nodeInfo()
         const tcp = await tcpServer.getConnectionsAsync()
         fetch.nodeInfo(name, node, tcp)
     })
