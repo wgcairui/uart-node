@@ -30,6 +30,16 @@ import { EVENT_NODE_TERMINAL_OFF } from '../protocol/events'
 import { parseATResponse } from '../services/at-parse'
 import fetch from '../fetch'
 import config from '../config'
+import {
+  DtuState,
+  type DtuHealth,
+  type AlertType,
+  type DtuAlert,
+  computeHealth,
+  isValidTransition,
+  shouldReportHealth,
+  HEALTH_REPORT_INTERVAL_MS
+} from './state'
 
 /** Dtu 队列中的指令项（QueryInstruct / OprateInstruct / ATInstruct） */
 export type DtuQueryItem = queryObjectServer | instructQuery | DTUoprate
@@ -68,6 +78,24 @@ export abstract class Dtu {
   /** 暂停传输模式标志（initialize 期间置 true） */
   protected pause = false
 
+  // ======================== 状态机字段 (PR #6 落地, RFC 002 §12) ========================
+
+  /** 当前 DtuState（PR #6 落地） */
+  protected state: DtuState = DtuState.HANDSHAKING
+  /** DtuHealth 健康度指标（不存 score，按需 computeHealth() 派生） */
+  protected health: DtuHealth = {
+    score: 100,
+    lastCommAt: Date.now(),
+    consecutiveSuccesses: 0,
+    consecutiveFailures: 0,
+    queryTimeoutCount: 0,
+    totalRestarts: 0,
+    totalReconnects: 0,
+    signal: 0
+  }
+  /** dtuHealth 周期上报 timer (only ONLINE/DEGRADED, RFC §12.4) */
+  private healthReportTimer: ReturnType<typeof setInterval> | null = null
+
   constructor(socket: Socket, mac: string) {
     this.mac = mac
     // 代理 socket 跟老 client.ts 保持一致（ProxySocketsb 暂未启用，但 socketsb 内部已用 ProxySocket）
@@ -78,6 +106,105 @@ export abstract class Dtu {
 
     // 老 client.ts:80 行为 1:1：构造时绑定 socket 监听
     this.bindSocket(this.socketsb.getSocket())
+  }
+
+  // ======================== 状态机 API (PR #6 落地, RFC 002 §12) ========================
+
+  /**
+   * 状态转换（RFC §12.2 转换表 + §12.4 dtuState 事件）
+   *
+   * 行为契约：
+   *   1. 查 VALID_TRANSITIONS 转换表（不合法静默忽略, 避免破坏老 client.ts 隐式行为）
+   *   2. 幂等: 同状态不重复触发
+   *   3. emit dtuState 事件 ({mac, from, to, score, reason, timestamp})
+   *   4. 启停 dtuHealth 60s 周期上报（ONLINE/DEGRADED 启, 其它停）
+   *
+   * @param to 目标状态
+   * @param reason 触发原因（free string, ≤ 64 字符, 不能为空, cairui 拍板）
+   */
+  protected transition(to: DtuState, reason: string): void {
+    const from = this.state
+    // 幂等检查
+    if (from === to) return
+    // 合法性检查（不合法静默忽略, 老 client.ts 没显式状态机，宽松行为）
+    if (!isValidTransition(from, to)) {
+      console.warn(`[Dtu ${this.mac}] invalid transition: ${from} -> ${to} (reason: ${reason})`)
+      return
+    }
+    // 更新 state
+    this.state = to
+    // 重新计算 score（health 字段已被外部更新过）
+    this.health.score = computeHealth(this.health)
+    // emit dtuState 事件
+    getIOClient().dtuState({
+      mac: this.mac,
+      from,
+      to,
+      score: this.health.score,
+      reason: reason.slice(0, 64),
+      timestamp: Date.now()
+    })
+    console.log(`[Dtu ${this.mac}] state: ${from} -> ${to} (score=${this.health.score}, reason: ${reason})`)
+    // 启停 dtuHealth 60s 周期上报
+    if (shouldReportHealth(to)) {
+      this.startHealthReport()
+    } else {
+      this.stopHealthReport()
+    }
+  }
+
+  /**
+   * 启动 dtuHealth 60s 周期上报（RFC §12.4）
+   * 重复调用幂等（已有 timer 不重建）
+   */
+  private startHealthReport(): void {
+    if (this.healthReportTimer) return
+    this.healthReportTimer = setInterval(() => this.emitHealth(), HEALTH_REPORT_INTERVAL_MS)
+  }
+
+  /**
+   * 停止 dtuHealth 60s 周期上报
+   */
+  private stopHealthReport(): void {
+    if (this.healthReportTimer) {
+      clearInterval(this.healthReportTimer)
+      this.healthReportTimer = null
+    }
+  }
+
+  /**
+   * emit dtuHealth 事件（RFC §12.4）
+   * 60s 周期调用一次, 仅 ONLINE/DEGRADED 状态
+   */
+  protected emitHealth(): void {
+    if (!shouldReportHealth(this.state)) return
+    // 重新计算 score
+    this.health.score = computeHealth(this.health)
+    getIOClient().dtuHealth({
+      mac: this.mac,
+      score: this.health.score,
+      health: {
+        lastCommAt: this.health.lastCommAt,
+        consecutiveSuccesses: this.health.consecutiveSuccesses,
+        consecutiveFailures: this.health.consecutiveFailures,
+        queryTimeoutCount: this.health.queryTimeoutCount,
+        totalRestarts: this.health.totalRestarts,
+        totalReconnects: this.health.totalReconnects,
+        signal: this.health.signal
+      },
+      timestamp: Date.now()
+    })
+  }
+
+  /**
+   * emit dtuAlert 事件（RFC §12.4 + §12.4.2）
+   * 4 类: AT_TIMEOUT / INVALID_REGISTER / PROFILE_CACHE_FAIL / FATAL
+   *
+   * @param alert 完整 alert payload (mac 可为 null for INVALID_REGISTER/FATAL)
+   */
+  protected emitAlert(alert: DtuAlert): void {
+    getIOClient().dtuAlert(alert)
+    console.log(`[Dtu ${alert.mac ?? '<null>'}] alert: ${alert.type} - ${alert.message}`)
   }
 
   // ======================== 抽象方法（子类必须实现）========================
@@ -114,11 +241,24 @@ export abstract class Dtu {
     this.initialize()
       .then(info => {
         fetch.dtuInfo(info as any)
+        // PR #6: initialize() 成功 → transition ONLINE
+        this.transition(DtuState.ONLINE, 'initialize_ok')
+        this.health.lastCommAt = Date.now()
+        this.health.consecutiveSuccesses++
+        this.health.consecutiveFailures = 0
       })
       .catch(err => {
         // 老 client.ts 用 promise 没 catch，错误会被 unhandledRejection 兜底
         // 这里加 console.error 方便 staging 24h 观察
         console.error(`[Dtu ${this.mac}] initialize failed:`, err)
+        // PR #6: initialize() 失败 → emit AT_TIMEOUT alert (mac 已知, 完整设备层)
+        this.emitAlert({
+          mac: this.mac,
+          type: 'AT_TIMEOUT',
+          message: `[dtu] initialize: AT queries failed: ${(err as Error).message}`,
+          timestamp: Date.now()
+        })
+        this.transition(DtuState.OFFLINE, 'initialize_failed')
       })
 
     socket
@@ -133,6 +273,9 @@ export abstract class Dtu {
         this.setPause('close')
         socket.destroy()
         this.socketsb = null
+        // PR #6: socket close → transition OFFLINE + 停 60s 上报
+        this.transition(DtuState.OFFLINE, 'socket_close')
+        this.stopHealthReport()
       })
       // 监听新指令入队 → 触发队列处理
       .on('Queue', () => {

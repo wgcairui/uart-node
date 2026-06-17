@@ -71,6 +71,10 @@ const mockIO: any = {
   terminalMountDevTimeOut: (...args: any[]) => mockSocket.emit('terminalMountDevTimeOut', ...args),
   instructTimeOut: (...args: any[]) => mockSocket.emit('instructTimeOut', ...args),
   emit: (...args: any[]) => mockSocket.emit(...args),
+  // PR #6 新增 3 个状态机事件
+  dtuState: (event: any) => mockSocket.emit('dtuState', event),
+  dtuHealth: (event: any) => mockSocket.emit('dtuHealth', event),
+  dtuAlert: (event: any) => mockSocket.emit('dtuAlert', event),
   isConnected: true
 }
 
