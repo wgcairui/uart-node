@@ -153,7 +153,19 @@ export function __resetUploaderForTest(): void {
 const UPLOAD_CONCURRENCY = 4
 /** HTTP 上传队列上限（背压） */
 const UPLOAD_QUEUE_MAX = 1000
-/** HTTP 单次请求超时 */
-const UPLOAD_TIMEOUT_MS = 5_000
+/**
+ * HTTP 单次请求超时 (2026-06-22 hotfix: 5_000 → 30_000)
+ *
+ * 历史: 默认 5s 与 server 端 `terminal.parse` 高峰耗时 (4.7s) 几乎重叠,
+ *       server 略慢 (5.1s) 就触发 `AbortSignal.timeout` → 客户端 RST → ECONNRESET
+ *       雪崩 (实测 8 次/2s @ 22:06:39-41)。
+ *
+ * 为什么不是更长 (60s / 120s): server 端 hotfix 把 `/api/node/queryData`
+ *   改成 fire-and-forget (鉴权后立即 ack), 30s 已经留 6× 余量。
+ *   保留重试 + 指数退避, 单次超时只是放弃这一次, 不是放弃整条数据流。
+ *
+ * 可由环境变量 UPLOAD_TIMEOUT_MS 覆盖 (跟 uart-pesiv-node 对齐)。
+ */
+const UPLOAD_TIMEOUT_MS = Number(process.env.UPLOAD_TIMEOUT_MS ?? 30_000)
 /** HTTP 重试最大次数 */
 const UPLOAD_RETRY_MAX = 2
