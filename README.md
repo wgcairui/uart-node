@@ -51,8 +51,14 @@ Node 端在连接 server 时同时把 token 放在三个握手通道（与 `uart
 
 ### HTTP /api/node/* 上传
 
-`fetch.ts` 走原生 `fetch` + `AbortSignal.timeout(5000)`，POST 时把 token 塞在
+`fetch.ts` 走原生 `fetch` + `AbortSignal.timeout(30000)` (默认 30s,
+可由 `UPLOAD_TIMEOUT_MS` 环境变量覆盖)，POST 时把 token 塞在
 `x-node-token` header。
+
+> ⚠️ **2026-06-22 hotfix**: 默认超时从 5s 调到 30s, 修复 ECONNRESET 雪崩。
+> 5s 太接近 server 端 `terminal.parse` 高峰耗时 (4.7s), server 略慢就触发
+> AbortSignal timeout → RST。server 端同步把 `/api/node/queryData` 改成
+> fire-and-forget, 30s 留 6× 余量。详见 server commit。
 
 ### 部署示例
 
