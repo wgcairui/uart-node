@@ -126,9 +126,17 @@ export abstract class Dtu {
     const from = this.state
     // 幂等检查
     if (from === to) return
-    // 合法性检查（不合法静默忽略, 老 client.ts 没显式状态机，宽松行为）
+    // 合法性检查（PR #12 hotfix: 升级到 console.error + emit INVALID_STATE_TRANSITION alert, 不再静默忽略）
+    // 8 天 staging 回归暴露 dtuStateLatest = 0 根因之一: transition() 静默 + warn 长期让 observability 断
+    // 部署后 7d TTL sweep + Node bug 叠加才被发现, 太晚. server 端 PR A 下个 sprint 接 log.terminalEvents
     if (!isValidTransition(from, to)) {
-      console.warn(`[Dtu ${this.mac}] invalid transition: ${from} -> ${to} (reason: ${reason})`)
+      console.error(`[Dtu ${this.mac}] invalid transition: ${from} -> ${to} (reason: ${reason})`)
+      this.emitAlert({
+        mac: this.mac,
+        type: 'INVALID_STATE_TRANSITION',
+        message: `[dtu] state machine: invalid transition ${from} -> ${to} (reason: ${reason})`,
+        timestamp: Date.now()
+      })
       return
     }
     // 更新 state
@@ -292,6 +300,15 @@ export abstract class Dtu {
    */
   public reConnectSocket(socket: Socket): void {
     this.socketsb = new socketsb(socket, this.mac)
+    // PR #12 hotfix: 3 步 recovery (offline → handshaking → initializing → online)
+    // bindSocket 内部 initialize() 完 transition(ONLINE, 'initialize_ok') — 我们先到 INITIALIZING
+    // 8 天 staging 回归暴露: 之前 reConnectSocket 不重置 state, OFFLINE → ONLINE invalid
+    //   transition() 静默忽略 (PR #6 当时 console.warn + return), dtuState 事件不 emit,
+    //   server 端 dtuStateLatest 永远不更新 (叠加 7d TTL sweep 数据清空).
+    // OFFLINE → HANDSHAKING 跳过 CONNECTING (reConnectSocket 不重跑 sniffer, 直接进注册路径)
+    // 3 步 recovery 跟 initial connect 路径一致 (default state = HANDSHAKING 那套), observability 完整
+    this.transition(DtuState.HANDSHAKING, 'reconnect')
+    this.transition(DtuState.INITIALIZING, 'reconnect')
     this.bindSocket(this.socketsb.getSocket())
     // 判断是否是主动断开
     if (this.reboot) {

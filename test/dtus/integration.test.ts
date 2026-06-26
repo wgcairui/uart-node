@@ -170,18 +170,35 @@ describe('Dtu 基类 — 状态机集成', () => {
     expect(calls.length).toBe(0)
   })
 
-  test('transition 不合法 → 静默忽略', () => {
+  test('transition 不合法 → console.error + emit INVALID_STATE_TRANSITION alert (PR #12 hotfix)', () => {
+    // PR #12 hotfix: invalid transition 不再静默忽略, 升级到 console.error + emit alert
+    //   8 天 staging 回归暴露根因之一. server 端 PR A 下个 sprint 接 log.terminalEvents
     const dtu = new TestDtu(makeMockSocket(), 'TEST')
+    // spy console.error
+    const consoleSpy = spyOn(console, 'error').mockImplementation(() => {})
     // 初始 HANDSHAKING → ONLINE 是合法的，转一次
     ;(dtu as any).transition(DtuState.ONLINE, 'init')
     mockSocket.emit.mockClear()
     // OFFLINE → ONLINE 不合法（OFFLINE 是终态）
     ;(dtu as any).transition(DtuState.OFFLINE, 'force')  // OFFLINE 合法
     ;(dtu as any).transition(DtuState.ONLINE, 'invalid_back')  // OFFLINE → ONLINE 不合法
-    const calls = mockSocket.emit.mock.calls.filter(c => c[0] === 'dtuState')
-    // 只应该有 ONLINE → OFFLINE 一次，OFFLINE → ONLINE 静默忽略
-    expect(calls.length).toBe(1)
-    expect(calls[0][1].to).toBe(DtuState.OFFLINE)
+    // dtuState 仍只 emit ONLINE → OFFLINE 一次（OFFLINE → ONLINE 不合法不 emit dtuState）
+    const stateCalls = mockSocket.emit.mock.calls.filter(c => c[0] === 'dtuState')
+    expect(stateCalls.length).toBe(1)
+    expect(stateCalls[0][1].to).toBe(DtuState.OFFLINE)
+    // 但 emit INVALID_STATE_TRANSITION dtuAlert 一次
+    const alertCalls = mockSocket.emit.mock.calls.filter(c => c[0] === 'dtuAlert')
+    expect(alertCalls.length).toBe(1)
+    const alert = alertCalls[0][1] as any
+    expect(alert.type).toBe('INVALID_STATE_TRANSITION')
+    expect(alert.mac).toBe('TEST')
+    expect(alert.message).toContain('OFFLINE -> ONLINE')
+    expect(alert.message).toContain('invalid_back')
+    // console.error 被调一次
+    expect(consoleSpy).toHaveBeenCalled()
+    const errMsg = String(consoleSpy.mock.calls[0][0])
+    expect(errMsg).toContain('invalid transition')
+    consoleSpy.mockRestore()
   })
 
   test('initialize 成功 → transition ONLINE', async () => {
@@ -228,6 +245,39 @@ describe('Dtu 基类 — 状态机集成', () => {
     const stateCalls = mockSocket.emit.mock.calls.filter(c => c[0] === 'dtuState')
     const offlineCall = stateCalls.find(c => (c[1] as any).to === DtuState.OFFLINE)
     expect(offlineCall).toBeDefined()
+  })
+
+  test('reConnectSocket 3 步 recovery: OFFLINE → HANDSHAKING → INITIALIZING → ONLINE (PR #12 hotfix)', async () => {
+    // PR #12 hotfix: 之前 reConnectSocket 不重置 state, OFFLINE → ONLINE invalid 静默忽略,
+    //   dtuState 事件不 emit, server 端 dtuStateLatest 永远不更新 (8 天 staging 回归暴露)
+    // 现在走 3 步 recovery (OFFLINE → HANDSHAKING → INITIALIZING → ONLINE),
+    // 跳过 CONNECTING (reConnectSocket 不重跑 sniffer, 直接进注册路径)
+    const sock = makeMockSocket()
+    const dtu = new TestDtu(sock, 'TEST')
+    await new Promise(r => setImmediate(r))
+    // 初始连接 HANDSHAKING → ONLINE
+    expect((dtu as any).state).toBe(DtuState.ONLINE)
+    // 触发 socket close → OFFLINE
+    sock.emit('close')
+    await new Promise(r => setImmediate(r))
+    expect((dtu as any).state).toBe(DtuState.OFFLINE)
+    mockSocket.emit.mockClear()
+    // 模拟重连: 调 reConnectSocket
+    const newSock = makeMockSocket()
+    dtu.reConnectSocket(newSock)
+    await new Promise(r => setImmediate(r))
+    // 3 步 recovery 全 emit: HANDSHAKING / INITIALIZING / ONLINE
+    // (OFFLINE → HANDSHAKING 由 reConnectSocket 触发, HANDSHAKING → INITIALIZING 跟 INITIALIZING → ONLINE 由 bindSocket 内部触发)
+    const stateCalls = mockSocket.emit.mock.calls
+      .filter(c => c[0] === 'dtuState')
+      .map(c => (c[1] as any).to as DtuState)
+    expect(stateCalls).toEqual([
+      DtuState.HANDSHAKING,
+      DtuState.INITIALIZING,
+      DtuState.ONLINE
+    ])
+    // 终态 ONLINE
+    expect((dtu as any).state).toBe(DtuState.ONLINE)
   })
 })
 
