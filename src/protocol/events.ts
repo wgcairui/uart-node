@@ -148,12 +148,13 @@ export interface DtuHealthEvent {
   timestamp: number
 }
 
-/** dtuAlert 事件 4 类枚举（cairui 拍板 2026-06-15） */
+/** dtuAlert 事件 5 类枚举（cairui 拍板 2026-06-15 4 类 + 2026-06-26 PR #12 hotfix 增 INVALID_STATE_TRANSITION） */
 export type AlertType =
-  | 'AT_TIMEOUT'         // §3.7.4: AT 连续 3 次超时
-  | 'INVALID_REGISTER'   // §3.7.4: 非注册包连接（mac: null）
-  | 'PROFILE_CACHE_FAIL' // §3.7.4: profile cache 拉/写连续 5 次失败
-  | 'FATAL'              // §3.7.4: 进程级 fatal（main 兜底, mac: null）
+  | 'AT_TIMEOUT'                  // §3.7.4: AT 连续 3 次超时
+  | 'INVALID_REGISTER'            // §3.7.4: 非注册包连接（mac: null）
+  | 'PROFILE_CACHE_FAIL'          // §3.7.4: profile cache 拉/写连续 5 次失败
+  | 'FATAL'                       // §3.7.4: 进程级 fatal（main 兜底, mac: null）
+  | 'INVALID_STATE_TRANSITION'    // §12.4.2: state machine 非法转换 (PR #12 hotfix, 8 天 staging 回归暴露)
 
 /** dtuAlert 事件 payload（FATAL 走 dtuAlert 不抽 alarm, 5min 去重, cairui 拍板） */
 export interface DtuAlertEvent {

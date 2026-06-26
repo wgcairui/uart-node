@@ -13,6 +13,7 @@ import { describe, expect, test } from 'bun:test'
 import {
   DtuState,
   type DtuHealth,
+  type AlertType,
   computeHealth,
   healthTier,
   isValidTransition,
@@ -86,6 +87,34 @@ describe('DtuState 转换合法性', () => {
     for (const v of Object.values(DtuState)) {
       expect(typeof v).toBe('string')
     }
+  })
+})
+
+// ======================== AlertType 5 类 (PR #12 hotfix) ========================
+
+describe('AlertType 5 类枚举 (PR #12 hotfix)', () => {
+  // PR #12 hotfix: 加 INVALID_STATE_TRANSITION 第 5 类 alert
+  // 8 天 staging 回归暴露: transition() 静默忽略 invalid + console.warn 长期让 observability 断
+  // 升级到 console.error + emit alert, server 端 PR A 下个 sprint 接 log.terminalEvents
+  test('5 类 alert 字符串赋值合法', () => {
+    const alerts: AlertType[] = [
+      'AT_TIMEOUT',
+      'INVALID_REGISTER',
+      'PROFILE_CACHE_FAIL',
+      'FATAL',
+      'INVALID_STATE_TRANSITION'
+    ]
+    expect(alerts.length).toBe(5)
+    for (const a of alerts) {
+      expect(typeof a).toBe('string')
+      expect(a.length).toBeGreaterThan(0)
+    }
+  })
+
+  test('INVALID_STATE_TRANSITION 字符串格式正确', () => {
+    // 用 as const 验证 TypeScript 类型可赋值
+    const a: AlertType = 'INVALID_STATE_TRANSITION'
+    expect(a).toBe('INVALID_STATE_TRANSITION')
   })
 })
 

@@ -189,7 +189,12 @@ const VALID_TRANSITIONS = new Set<string>([
   'RECONNECTING->OFFLINE',
   'RESTARTING->OFFLINE',
   // 任何状态 → RESTARTING（AT+Z 触发）
-  'INITIALIZING->RESTARTING'
+  'INITIALIZING->RESTARTING',
+  // PR #12 hotfix: OFFLINE 是 terminal state, 但 reConnectSocket 需要 recovery 路径
+  // 之前漏: OFFLINE 不在 VALID_TRANSITIONS, transition(OFFLINE → ONLINE) 静默忽略
+  // 8 天 staging 回归暴露 dtuStateLatest = 0 根因之一
+  // OFFLINE → HANDSHAKING 跳过 CONNECTING (reConnectSocket 不重跑 sniffer, 直接进注册)
+  'OFFLINE->HANDSHAKING'
 ])
 
 /**
@@ -200,18 +205,28 @@ export function isValidTransition(from: DtuState, to: DtuState): boolean {
   return VALID_TRANSITIONS.has(`${from}->${to}`)
 }
 
-// ======================== 4 类 AlertType ========================
+// ======================== 5 类 AlertType (PR #12 hotfix) ========================
 
 /**
- * 4 个告警类型（cairui 2026-06-15 拍板）
+ * 5 个告警类型（cairui 2026-06-15 拍板 4 类 + 2026-06-26 hotfix 增 INVALID_STATE_TRANSITION）
  *
  * 触发位置（RFC §12.4.2）：
  *   - AT_TIMEOUT: client.run() 连续 3 次 AT 查询超时（src/dtus/base.ts:queryInstruct）
  *   - INVALID_REGISTER: sniff register 包解析失败（src/server/tcp-server.ts:onConnection）
  *   - PROFILE_CACHE_FAIL: /api/node/dtu-info-cache GET/POST 连续 5 次失败（PR #7 落地）
  *   - FATAL: 进程级 fatal（main.ts catch，mac: null）
+ *   - INVALID_STATE_TRANSITION: state machine 非法转换（src/dtus/base.ts:transition, PR #12 hotfix）
+ *
+ * PR #12 hotfix 背景: 8 天 staging 回归暴露 dtuStateLatest = 0 (TTL 7d 自然过期 + Node bug 叠加),
+ *   transition() 静默忽略 invalid + console.warn 导致 observability 断。
+ *   升级到 console.error + emit alert, 让 server 下个 sprint PR A 落库可见。
  */
-export type AlertType = 'AT_TIMEOUT' | 'INVALID_REGISTER' | 'PROFILE_CACHE_FAIL' | 'FATAL'
+export type AlertType =
+  | 'AT_TIMEOUT'
+  | 'INVALID_REGISTER'
+  | 'PROFILE_CACHE_FAIL'
+  | 'FATAL'
+  | 'INVALID_STATE_TRANSITION'
 
 /**
  * DtuAlert payload（RFC §12.4）
