@@ -1,5 +1,5 @@
 import config, { IO_CONFIG } from "./config"
-import { registerConfig, queryObjectServer, instructQuery, DTUoprate } from "uart"
+import { type registerConfig, type queryObjectServer, type instructQuery, type DTUoprate, type ApolloMongoResult } from "uart"
 import IOClient from "./IO"
 import TcpServer from "./server/tcp-server"
 import { nodeInfo } from "./services/dtu-info"
@@ -39,8 +39,12 @@ IOClient
     })
 
     // 发送终端设备AT指令
-    .on(config.EVENT_SERVER.DTUoprate, async (Query: DTUoprate) => {
-        tcpServer.bus("ATInstruct", Query as DTUoprate)
+    // 2026-07-14: server 端 OprateDTU 走 emit-with-ack 新协议,期望 Node 端
+    // 在 AT 响应后调 ack(result) 第三参数,否则 server 10s timeout 兜底报
+    // "Node 端在 10000ms 内未响应 (operation has timed out)".
+    // 老协议 `dtuopratesuccess` 事件仍保留 (server event.once 路径) 做向后兼容
+    .on(config.EVENT_SERVER.DTUoprate, async (Query: DTUoprate, ack?: (result: Partial<ApolloMongoResult>) => void) => {
+        tcpServer.bus("ATInstruct", Query as DTUoprate, ack)
     })
 
     // 服务器要求发送查询节点运行状态
