@@ -19,7 +19,7 @@
 
 import net, { Server, Socket } from 'net'
 import config from '../config'
-import { queryObjectServer, instructQuery, DTUoprate, eventType, registerConfig } from 'uart'
+import { type queryObjectServer, type instructQuery, type DTUoprate, eventType, type registerConfig, type ApolloMongoResult } from 'uart'
 import { getIOClient } from '../services/io-client'
 import { Dtu } from '../dtus/base'
 import {
@@ -124,12 +124,29 @@ export class TcpServer {
   /**
    * 给 server 下行指令（query / AT / operate）派发
    * 行为跟老 src/TcpServer.ts:145-151 Bus() 1:1
+   *
+   * @param ack 可选 — 仅 ATInstruct 用, server 端 emit-with-ack 第三参数
+   *            透传给 Dtu.registerAck(), 后续 atParse() 拿 AT 响应后
+   *            调 ack(result) 通知 server, 修 10s timeout (2026-07-14)
    */
-  bus<T extends queryObjectServer | instructQuery | DTUoprate>(eventType: eventType, query: T): void {
+  bus<T extends queryObjectServer | instructQuery | DTUoprate>(
+    eventType: eventType,
+    query: T,
+    ack?: (result: Partial<ApolloMongoResult>) => void
+  ): void {
     const dtu = this.macSocketMaps.get(query.DevMac)
     if (dtu && dtu.socketsb) {
       query.eventType = eventType
       dtu.saveCache(query)
+      // ATInstruct 走新协议 emit-with-ack: 把 ack 挂在 dtu 上, 后续 atParse 触发
+      if (eventType === 'ATInstruct' && ack) {
+        dtu.registerAck(query.events, ack)
+      }
+    } else {
+      // 设备不在线 / 未注册 — 立即回 ack (不阻塞 server 10s 超时)
+      if (eventType === 'ATInstruct' && ack) {
+        ack({ ok: 0, msg: '设备不在线或未注册到当前节点' })
+      }
     }
   }
 

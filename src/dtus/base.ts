@@ -78,6 +78,21 @@ export abstract class Dtu {
   /** 暂停传输模式标志（initialize 期间置 true） */
   protected pause = false
 
+  /**
+   * ATInstruct ack 回调表（emit-with-ack 新协议用, fix AT timeout 2026-07-14）
+   *
+   * server 端 `OprateDTU` 现在用 `getApp().in(mountNode).timeout(10_000).emit('DTUoprate', Query, (err, ack) => resolve(ack))`
+   * 走 socket.io 4.x 原生 ack 机制,期望 Node 端在拿到 AT 响应后调 ack(result) 第三参数。
+   *
+   * 老协议 `getIOClient().emit('dtuopratesuccess' as any, query.events, result)` 走
+   * server 端 `node.socket.controller.ts:dtuOprateSuccess` 转发到内部 EventEmitter
+   * 触发 `event.once(Query.events, ...)` — 仍保留做向后兼容。
+   *
+   * Map key = `query.events` (server 端生成的唯一 event 名, 'QueryAT' + Date.now() + mac 形式)
+   * 12s 清理 timer 略长于 server 10s timeout, 防 AT 永远不返回导致 map 累积。
+   */
+  private atAckCallbacks: Map<string, (result: Partial<ApolloMongoResult>) => void> = new Map()
+
   // ======================== 状态机字段 (PR #6 落地, RFC 002 §12) ========================
 
   /** 当前 DtuState（PR #6 落地） */
@@ -363,6 +378,40 @@ export abstract class Dtu {
   }
 
   /**
+   * 注册 AT 指令的 ack 回调（emit-with-ack 新协议, fix AT timeout 2026-07-14）
+   *
+   * 由 TcpServer.bus() 在收到 server 'DTUoprate' 事件 + ack 回调时调用,
+   * 后续 atParse() 拿到 AT 响应后会调 resolveAck() 触发 ack 通知 server。
+   *
+   * 12s 清理 timer: 略长于 server 端 10s timeout, 防 AT 永远不返回 (设备掉线 / 协议错)
+   * 导致 map 累积;即使 ack 永不调用, server 端 setTimeout 兜底也会先 resolve 出错结果。
+   */
+  public registerAck(
+    events: string,
+    ack: (result: Partial<ApolloMongoResult>) => void
+  ): void {
+    // lazy init: 测试用 Object.create() 跳构造器, atAckCallbacks 字段未初始化
+    this.atAckCallbacks ??= new Map()
+    this.atAckCallbacks.set(events, ack)
+    setTimeout(() => {
+      this.atAckCallbacks.delete(events)
+    }, 12_000)
+  }
+
+  /**
+   * 触发 AT ack 回调（atParse 拿到结果时调, 紧跟 dtuopratesuccess 老事件 emit 之后）
+   */
+  protected resolveAck(events: string, result: Partial<ApolloMongoResult>): void {
+    // lazy init: 同 registerAck, 测试 Object.create 跳构造器场景
+    this.atAckCallbacks ??= new Map()
+    const ack = this.atAckCallbacks.get(events)
+    if (ack) {
+      this.atAckCallbacks.delete(events)
+      ack(result)
+    }
+  }
+
+  /**
    * 通用：socket close 时通知 server
    * （RFC 002 §3.4 字面方法，子类可重写；默认 1:1 抄老 client.ts bindSocket close 行为）
    */
@@ -535,6 +584,14 @@ export abstract class Dtu {
    * 关键不变量：
    *   - 解析成功且 msg 为空（如 IOTEN=off）→ 触发 run() 重查全部属性
    *   - 解析失败 → ok=0 + "挂载设备响应超时" 提示
+   *
+   * 协议双轨（fix AT timeout 2026-07-14）:
+   *   1. 老协议 `getIOClient().emit('dtuopratesuccess', events, result)`
+   *      → server 端 `node.socket.controller.ts:dtuOprateSuccess` 转发到
+   *      内部 EventEmitter 触发 `event.once(events, ...)` 路径
+   *   2. 新协议 `resolveAck(events, result)` 触发 server emit-with-ack
+   *      第三参数, 这是 server 端首选路径 (走 timeout(10_000) ack)
+   *   两条都触发则 server 端 Promise resolve 多次都是 no-op
    */
   protected atParse(query: DTUoprate, res: socketResult): void {
     const { buffer } = res
@@ -551,6 +608,9 @@ export abstract class Dtu {
       upserted: buffer
     }
     console.log({ Query: query, result, res })
+    // 老协议: 向后兼容, 老 midway Node / uart-node 走过的路径
     getIOClient().emit('dtuopratesuccess' as any, query.events, result)
+    // 新协议: server emit-with-ack 第三参数, 修 10s timeout
+    this.resolveAck(query.events, result)
   }
 }
