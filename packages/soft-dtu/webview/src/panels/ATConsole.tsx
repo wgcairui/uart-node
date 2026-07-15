@@ -1,0 +1,182 @@
+/**
+ * AT 指令控制台
+ *
+ * 功能：
+ *   - 输入 +++AT+XXX，按 Enter 发送
+ *   - 自动补全：按 Tab 从当前选中协议的 atCommands 列表里推荐
+ *   - 显示发送历史 + 接收响应（HEX + ASCII 双视图）
+ *   - 解析响应：跟协议定义里的 parse 正则匹配
+ *
+ * 跟 UartNode 端 src/dtus/cellular.ts:queryAT 1:1 兼容（响应 +ok=xxx / +err=xxx）
+ */
+
+import { useEffect, useRef, useState } from "preact/hooks";
+import { serial, protocol } from "../api.ts";
+import { uint8ToHex } from "../api.ts";
+import type { ProtocolDefinition } from "../bindings.ts";
+
+interface LogEntry {
+  ts: number;
+  dir: "tx" | "rx";
+  ascii: string;
+  hex: string;
+  parsed?: string;
+}
+
+const HISTORY_MAX = 200;
+
+export function ATConsole() {
+  const [input, setInput] = useState("+++AT+");
+  const [history, setHistory] = useState<LogEntry[]>([]);
+  const [protocols, setProtocols] = useState<ProtocolDefinition[]>([]);
+  const [activeProtoId, setActiveProtoId] = useState<string>("");
+  const [error, setError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  /** 用 ref 跟踪最近一条 tx 的指令名（rx 来时回查 parse 正则）*/
+  const lastTxCmdRef = useRef<string>("");
+
+  const activeProto = protocols.find((p) => p.id === activeProtoId);
+
+  // 拉协议目录（自动补全用）
+  useEffect(() => {
+    protocol.list()
+      .then((list) => {
+        setProtocols(list);
+        // 默认选第一个 4G DTU 协议（手动选 phase 1 留 todo）
+        const first4G = list.find((p) => p.type === "cellular-4g-dtu");
+        if (first4G) setActiveProtoId(first4G.id);
+      })
+      .catch((err) => setError(`协议拉取失败: ${(err as Error).message}`));
+  }, []);
+
+  // 订阅串口数据（activeProto 变化时重新订阅，让 parseResponse 拿到最新协议）
+  useEffect(() => {
+    const unsub = serial.onData((data) => {
+      const ascii = new TextDecoder("utf-8", { fatal: false }).decode(data);
+      const hex = uint8ToHex(data);
+      const parsed = parseResponse(ascii, lastTxCmdRef.current, activeProto);
+      const entry: LogEntry = { ts: Date.now(), dir: "rx", ascii, hex, parsed };
+      setHistory((h) => [...h, entry].slice(-HISTORY_MAX));
+    });
+    return unsub;
+  }, [activeProto]);
+
+  /** 自动补全：按 PID/VER/GVER 等关键字推荐 */
+  const suggestions = (() => {
+    if (!activeProto?.atCommands) return [];
+    const trimmed = input.replace(/^\+{3}AT\+/, "").toUpperCase();
+    if (!trimmed) return activeProto.atCommands.map((c) => c.name);
+    return activeProto.atCommands
+      .filter((c) => c.name.toUpperCase().includes(trimmed))
+      .map((c) => c.name);
+  })();
+
+  async function send() {
+    setError(null);
+    const cmd = input.endsWith("\r") ? input : input + "\r";
+    const data = new TextEncoder().encode(cmd);
+    try {
+      await serial.write(data);
+      // 记录最近一条 tx 的指令名（rx 来时回查 parse）
+      const cmdName = cmd.replace(/^\+{3}AT\+/, "").replace(/\r$/, "").trim().split("=")[0];
+      lastTxCmdRef.current = cmdName;
+      setHistory((h) => [
+        ...h,
+        {
+          ts: Date.now(),
+          dir: "tx",
+          ascii: cmd.replace(/\r$/, ""),
+          hex: uint8ToHex(data),
+        },
+      ].slice(-HISTORY_MAX));
+    } catch (err) {
+      setError(`send 失败: ${(err as Error).message}`);
+    }
+  }
+
+  function onKeyDown(e: KeyboardEvent) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      send();
+    } else if (e.key === "Tab" && suggestions.length > 0) {
+      e.preventDefault();
+      setInput(`+++AT+${suggestions[0]}`);
+    }
+  }
+
+  return (
+    <div class="at-console">
+      <section class="row">
+        <label>协议</label>
+        <select
+          value={activeProtoId}
+          onChange={(e) => setActiveProtoId((e.target as HTMLSelectElement).value)}
+        >
+          <option value="">（不解析）</option>
+          {protocols.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name} ({p.atCommands?.length ?? 0} AT)
+            </option>
+          ))}
+        </select>
+        <span class="hint">Tab 自动补全 · Enter 发送</span>
+      </section>
+
+      <section class="row">
+        <input
+          ref={inputRef}
+          type="text"
+          class="cmd-input"
+          value={input}
+          onInput={(e) => setInput((e.target as HTMLInputElement).value)}
+          onKeyDown={onKeyDown}
+          spellcheck={false}
+          placeholder="+++AT+PID"
+        />
+        <button class="primary" onClick={send}>发送</button>
+      </section>
+
+      {suggestions.length > 0 && (
+        <div class="suggestions">
+          {suggestions.map((s) => (
+            <button key={s} class="suggestion" onClick={() => setInput(`+++AT+${s}`)}>
+              {s}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <div class="log">
+        {history.slice().reverse().map((e, idx) => (
+          <div key={`${e.ts}-${idx}`} class={`log-entry log-${e.dir}`}>
+            <span class="ts">{new Date(e.ts).toLocaleTimeString()}</span>
+            <span class="dir">{e.dir === "tx" ? "→" : "←"}</span>
+            <span class="ascii">{e.ascii || "(空)"}</span>
+            <span class="hex">{e.hex}</span>
+            {e.parsed && <span class="parsed"> · {e.parsed}</span>}
+          </div>
+        ))}
+      </div>
+
+      {error && <div class="error">{error}</div>}
+    </div>
+  );
+}
+
+/** 解析响应：按协议定义里的 parse 正则匹配 */
+function parseResponse(
+  ascii: string,
+  cmdName: string,
+  proto: ProtocolDefinition | undefined,
+): string | undefined {
+  if (!proto?.atCommands || !cmdName) return undefined;
+  const at = proto.atCommands.find((c) => c.name === cmdName);
+  if (!at) return undefined;
+  try {
+    const re = new RegExp(at.parse);
+    const m = ascii.match(re);
+    return m ? `${at.name} → ${m[1] ?? m[0]}` : "不匹配";
+  } catch {
+    return undefined;
+  }
+}

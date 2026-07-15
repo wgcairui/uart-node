@@ -1,0 +1,488 @@
+/**
+ * 软 DTU WebView 全局样式
+ *
+ * 设计原则：
+ *   - 极简：黑色背景 + 单色高亮，跟 XCOM / sscom 风格接近
+ *   - 信息密度高：fixed 字体 + 等宽对齐
+ *   - 暗色优先：长时间调试不刺眼
+ */
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --bg: #1a1a1a;
+  --bg-elev: #232323;
+  --bg-elev-2: #2a2a2a;
+  --border: #3a3a3a;
+  --text: #e0e0e0;
+  --text-dim: #999;
+  --text-bright: #fff;
+  --accent: #4a9eff;
+  --accent-hover: #5fb0ff;
+  --danger: #ff5555;
+  --danger-hover: #ff7777;
+  --ok: #4caf50;
+  --warn: #ffaa00;
+  --tx: #4a9eff;
+  --rx: #4caf50;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", Menlo, Consolas, monospace;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", sans-serif;
+}
+
+html, body, #app {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* ─── App shell ─── */
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.app-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 12px 20px;
+  background: var(--bg-elev);
+  border-bottom: 1px solid var(--border);
+}
+
+.app-header h1 {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-bright);
+}
+
+.subtitle {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.tabs {
+  display: flex;
+  gap: 2px;
+  padding: 0 12px;
+  background: var(--bg-elev);
+  border-bottom: 1px solid var(--border);
+}
+
+.tab {
+  padding: 10px 16px;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 13px;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.1s;
+}
+
+.tab:hover {
+  color: var(--text);
+}
+
+.tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.panel {
+  flex: 1;
+  overflow: auto;
+  padding: 20px;
+}
+
+/* ─── 通用 form ─── */
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.row label {
+  font-size: 12px;
+  color: var(--text-dim);
+  min-width: 60px;
+}
+
+.row .spacer {
+  margin-left: auto;
+}
+
+.row.toolbar {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 16px;
+}
+
+.row.actions {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+select, input[type="text"], input[type="number"] {
+  padding: 6px 10px;
+  background: var(--bg-elev-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  min-width: 120px;
+}
+
+select:focus, input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+select:disabled, input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+button {
+  padding: 6px 14px;
+  background: var(--bg-elev-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 13px;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  transition: all 0.1s;
+}
+
+button:hover:not(:disabled) {
+  background: var(--bg-elev);
+  border-color: var(--text-dim);
+}
+
+button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+button.primary {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+
+button.primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+button.danger {
+  background: var(--danger);
+  color: white;
+  border-color: var(--danger);
+}
+
+button.danger:hover:not(:disabled) {
+  background: var(--danger-hover);
+  border-color: var(--danger-hover);
+}
+
+.hint {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.status {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 3px;
+}
+
+.status.open {
+  background: rgba(76, 175, 80, 0.2);
+  color: var(--ok);
+}
+
+.status.closed {
+  background: var(--bg-elev-2);
+  color: var(--text-dim);
+}
+
+.error {
+  margin-top: 12px;
+  padding: 8px 12px;
+  background: rgba(255, 85, 85, 0.15);
+  border: 1px solid var(--danger);
+  border-radius: 4px;
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.warn {
+  margin-bottom: 16px;
+  padding: 10px 14px;
+  background: rgba(255, 170, 0, 0.1);
+  border: 1px solid var(--warn);
+  border-radius: 4px;
+  color: var(--warn);
+  font-size: 12px;
+}
+
+.count {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+}
+
+/* ─── AT Console ─── */
+
+.at-console {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.cmd-input {
+  flex: 1;
+  font-size: 14px;
+}
+
+.suggestions {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.suggestion {
+  padding: 2px 8px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+
+.log {
+  flex: 1;
+  overflow-y: auto;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.log-entry {
+  display: flex;
+  gap: 8px;
+  padding: 2px 4px;
+  align-items: baseline;
+}
+
+.log-entry:hover {
+  background: var(--bg-elev-2);
+}
+
+.log-entry .ts {
+  color: var(--text-dim);
+  flex-shrink: 0;
+  font-size: 10px;
+}
+
+.log-entry .dir {
+  flex-shrink: 0;
+  font-weight: bold;
+  width: 12px;
+}
+
+.log-tx .dir { color: var(--tx); }
+.log-rx .dir { color: var(--rx); }
+
+.log-entry .ascii {
+  flex: 0 0 auto;
+  color: var(--text-bright);
+}
+
+.log-entry .hex {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.log-entry .parsed {
+  color: var(--ok);
+  font-size: 11px;
+}
+
+/* ─── HEX View ─── */
+
+.hex-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.seg {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.seg-btn {
+  border: none;
+  border-radius: 0;
+  background: var(--bg-elev-2);
+  padding: 6px 12px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+
+.seg-btn:not(:last-child) {
+  border-right: 1px solid var(--border);
+}
+
+.seg-btn.active {
+  background: var(--accent);
+  color: white;
+}
+
+.hex-log {
+  flex: 1;
+  overflow-y: auto;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.hex-log .empty {
+  color: var(--text-dim);
+  text-align: center;
+  padding: 40px;
+  font-style: italic;
+}
+
+.hex-row {
+  display: flex;
+  gap: 16px;
+  padding: 2px 4px;
+  border-bottom: 1px solid transparent;
+}
+
+.hex-row:hover {
+  background: var(--bg-elev-2);
+}
+
+.hex-row .ts {
+  color: var(--text-dim);
+  font-size: 10px;
+  flex-shrink: 0;
+}
+
+.hex-row .hex {
+  color: var(--accent);
+  font-family: var(--font-mono);
+}
+
+.hex-row .ascii {
+  color: var(--text-bright);
+  font-family: var(--font-mono);
+}
+
+/* ─── Protocol Viewer ─── */
+
+.protocol-detail {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 20px;
+}
+
+.protocol-detail h2 {
+  font-size: 18px;
+  font-weight: 600;
+  margin-bottom: 16px;
+  color: var(--text-bright);
+}
+
+.protocol-detail h3 {
+  font-size: 13px;
+  font-weight: 600;
+  margin-top: 20px;
+  margin-bottom: 8px;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+dl.meta {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 16px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+
+dl.meta dt {
+  color: var(--text-dim);
+}
+
+dl.meta dd {
+  color: var(--text);
+}
+
+dl.meta code, code {
+  background: var(--bg-elev-2);
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  color: var(--accent);
+}
+
+code.regex {
+  color: var(--warn);
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  margin-top: 4px;
+}
+
+table th, table td {
+  text-align: left;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+table th {
+  color: var(--text-dim);
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.5px;
+}
+
+table tr:hover td {
+  background: var(--bg-elev-2);
+}
