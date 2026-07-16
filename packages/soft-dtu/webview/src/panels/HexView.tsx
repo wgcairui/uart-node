@@ -1,11 +1,8 @@
 /**
- * HEX/ASCII 实时数据视图
+ * HEX/ASCII 实时数据视图 — Apple SF card layout
  *
- * 功能：
- *   - 订阅串口数据流（serial.onData）
- *   - 实时切换 HEX / ASCII / 双视图
- *   - 自动滚动到最新（可暂停）
- *   - 缓冲最大 500 条记录
+ * 顶部：segmented control (HEX / ASCII / 双向) + 暂停开关 (SF toggle) + 清空 + 计数
+ * 中部：hex log (ts + hex + ascii 三栏)
  *
  * 跟 XCOM / sscom 的"显示"面板等价，但走软 DTU 通道
  */
@@ -32,7 +29,7 @@ export function HexView() {
   const [frames, setFrames] = useState<Frame[]>([]);
   const [mode, setMode] = useState<ViewMode>("both");
   const [paused, setPaused] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -59,30 +56,39 @@ export function HexView() {
 
   return (
     <div class="hex-view">
-      <section class="row toolbar">
-        <label>视图</label>
-        <div class="seg">
-          {(["hex", "ascii", "both"] as ViewMode[]).map((m) => (
-            <button
-              key={m}
-              class={`seg-btn ${mode === m ? "active" : ""}`}
-              onClick={() => setMode(m)}
-            >
-              {m.toUpperCase()}
-            </button>
-          ))}
-        </div>
+      <div class="panel-header">
+        <h2 class="panel-title">HEX/ASCII</h2>
+        <p class="panel-subtitle">实时数据流 HEX / ASCII 切换 · 缓冲 500 帧</p>
+      </div>
 
-        <label class="spacer">
-          <input
-            type="checkbox"
-            checked={paused}
-            onChange={(e) => setPaused((e.target as HTMLInputElement).checked)}
-          />
-          暂停
-        </label>
-        <button onClick={clear}>清空</button>
-        <span class="count">{frames.length} 帧</span>
+      <section class="card" style={{ flexShrink: 0 }}>
+        <div class="card-title">视图</div>
+
+        <div class="field-row" style={{ alignItems: "center" }}>
+          <div class="seg">
+            {(["hex", "ascii", "both"] as ViewMode[]).map((m) => (
+              <button
+                key={m}
+                class={`seg-btn ${mode === m ? "active" : ""}`}
+                onClick={() => setMode(m)}
+              >
+                {m.toUpperCase()}
+              </button>
+            ))}
+          </div>
+
+          <label class="toggle">
+            <input
+              type="checkbox"
+              checked={paused}
+              onChange={(e) => setPaused((e.target as HTMLInputElement).checked)}
+            />
+            暂停
+          </label>
+
+          <button onClick={clear}>清空</button>
+          <span class="count">{frames.length} 帧</span>
+        </div>
       </section>
 
       <div class="hex-log" ref={containerRef}>
@@ -92,7 +98,7 @@ export function HexView() {
           const ascii = bytesToAscii(f.bytes);
           return (
             <div key={`${f.ts}-${idx}`} class="hex-row">
-              <span class="ts">{new Date(f.ts).toLocaleTimeString()}</span>
+              <span class="ts">{new Date(f.ts).toLocaleTimeString("zh-CN", { hour12: false })}</span>
               {(mode === "hex" || mode === "both") && (
                 <span class="hex">{hex || "(空)"}</span>
               )}

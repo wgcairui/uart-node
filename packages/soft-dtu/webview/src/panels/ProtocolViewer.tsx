@@ -1,11 +1,8 @@
 /**
- * 协议定义浏览器
+ * 协议定义浏览器 — Apple SF card layout
  *
- * 功能：
- *   - 拉 server `/api/v2/protocols` 列协议
- *   - 点开看 AT 指令 / 寄存器表 / 默认串口参数
- *   - 手动选协议（不预选，Cairui 2026-07-14 16:35 拍板）
- *   - 刷新按钮强制 re-fetch（忽略 5min 缓存）
+ * 顶部：协议 select + 强制刷新 + 计数
+ * 详情（card）：标题 / meta dl / 注册包 / AT 指令表 / 寄存器表 / 默认串口参数 / 元数据
  *
  * 离线 fallback 显示提示（server 不可达时只有 modbus RTU）
  */
@@ -41,23 +38,33 @@ export function ProtocolViewer() {
 
   return (
     <div class="protocol-viewer">
-      <section class="row toolbar">
-        <label>协议</label>
-        <select
-          value={selectedId}
-          onChange={(e) => setSelectedId((e.target as HTMLSelectElement).value)}
-        >
-          <option value="">（不选）</option>
-          {protocols.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name} [{p.type}]
-            </option>
-          ))}
-        </select>
-        <button onClick={() => load(true)} disabled={loading}>
-          {loading ? "刷新中…" : "强制刷新"}
-        </button>
-        <span class="count">{protocols.length} 个协议</span>
+      <div class="panel-header">
+        <h2 class="panel-title">协议定义</h2>
+        <p class="panel-subtitle">从 server 拉的协议目录 · 手动选协议查看详情</p>
+      </div>
+
+      <section class="card">
+        <div class="card-title">选择</div>
+
+        <div class="field-row" style={{ alignItems: "center" }}>
+          <div class="field" style={{ flex: 1, marginBottom: 0 }}>
+            <select
+              value={selectedId}
+              onChange={(e) => setSelectedId((e.target as HTMLSelectElement).value)}
+            >
+              <option value="">（不选）</option>
+              {protocols.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name} [{p.type}]
+                </option>
+              ))}
+            </select>
+          </div>
+          <button onClick={() => load(true)} disabled={loading}>
+            {loading ? "刷新中…" : "强制刷新"}
+          </button>
+          <span class="count">{protocols.length} 个协议</span>
+        </div>
       </section>
 
       {!selected && protocols.length === 1 && protocols[0].id === "modbus-rtu-default" && (

@@ -1,18 +1,15 @@
 /**
- * AT 指令控制台
+ * AT 指令控制台 — Apple SF card layout
  *
- * 功能：
- *   - 输入 +++AT+XXX，按 Enter 发送
- *   - 自动补全：按 Tab 从当前选中协议的 atCommands 列表里推荐
- *   - 显示发送历史 + 接收响应（HEX + ASCII 双视图）
- *   - 解析响应：跟协议定义里的 parse 正则匹配
+ * 顶部：协议选择（parse 正则匹配用）
+ * 中部：suggestion chips + command input + Send
+ * 底部：log (TX/RX 双向, ts + ascii + hex + parsed 注释)
  *
  * 跟 UartNode 端 src/dtus/cellular.ts:queryAT 1:1 兼容（响应 +ok=xxx / +err=xxx）
  */
 
 import { useEffect, useRef, useState } from "preact/hooks";
-import { serial, protocol } from "../api.ts";
-import { uint8ToHex } from "../api.ts";
+import { serial, protocol, uint8ToHex } from "../api.ts";
 import type { ProtocolDefinition } from "../bindings.ts";
 
 interface LogEntry {
@@ -84,7 +81,7 @@ export function ATConsole() {
         ...h,
         {
           ts: Date.now(),
-          dir: "tx",
+          dir: "tx" as const,
           ascii: cmd.replace(/\r$/, ""),
           hex: uint8ToHex(data),
         },
@@ -106,50 +103,62 @@ export function ATConsole() {
 
   return (
     <div class="at-console">
-      <section class="row">
-        <label>协议</label>
-        <select
-          value={activeProtoId}
-          onChange={(e) => setActiveProtoId((e.target as HTMLSelectElement).value)}
-        >
-          <option value="">（不解析）</option>
-          {protocols.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name} ({p.atCommands?.length ?? 0} AT)
-            </option>
-          ))}
-        </select>
-        <span class="hint">Tab 自动补全 · Enter 发送</span>
-      </section>
+      <div class="panel-header">
+        <h2 class="panel-title">AT 指令</h2>
+        <p class="panel-subtitle">跟软 DTU 收发 4G AT 指令 · Tab 自动补全 · Enter 发送</p>
+      </div>
 
-      <section class="row">
-        <input
-          ref={inputRef}
-          type="text"
-          class="cmd-input"
-          value={input}
-          onInput={(e) => setInput((e.target as HTMLInputElement).value)}
-          onKeyDown={onKeyDown}
-          spellcheck={false}
-          placeholder="+++AT+PID"
-        />
-        <button class="primary" onClick={send}>发送</button>
-      </section>
-
-      {suggestions.length > 0 && (
-        <div class="suggestions">
-          {suggestions.map((s) => (
-            <button key={s} class="suggestion" onClick={() => setInput(`+++AT+${s}`)}>
-              {s}
-            </button>
-          ))}
+      <section class="card">
+        <div class="card-title">协议 (用于解析响应)</div>
+        <div class="field">
+          <select
+            value={activeProtoId}
+            onChange={(e) => setActiveProtoId((e.target as HTMLSelectElement).value)}
+          >
+            <option value="">（不解析）</option>
+            {protocols.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name} ({p.atCommands?.length ?? 0} AT)
+              </option>
+            ))}
+          </select>
         </div>
-      )}
+      </section>
+
+      <section class="card" style={{ flexShrink: 0 }}>
+        <div class="card-title">命令</div>
+
+        {suggestions.length > 0 && (
+          <div class="suggestions">
+            {suggestions.slice(0, 12).map((s) => (
+              <button key={s} class="suggestion" onClick={() => setInput(`+++AT+${s}`)}>
+                {s}
+              </button>
+            ))}
+          </div>
+        )}
+
+        <div class="field-row" style={{ alignItems: "stretch" }}>
+          <input
+            ref={inputRef}
+            type="text"
+            class="cmd-input"
+            value={input}
+            onInput={(e) => setInput((e.target as HTMLInputElement).value)}
+            onKeyDown={onKeyDown}
+            spellcheck={false}
+            placeholder="+++AT+PID"
+          />
+          <button class="primary large" onClick={send}>
+            发送
+          </button>
+        </div>
+      </section>
 
       <div class="log">
         {history.slice().reverse().map((e, idx) => (
           <div key={`${e.ts}-${idx}`} class={`log-entry log-${e.dir}`}>
-            <span class="ts">{new Date(e.ts).toLocaleTimeString()}</span>
+            <span class="ts">{new Date(e.ts).toLocaleTimeString("zh-CN", { hour12: false })}</span>
             <span class="dir">{e.dir === "tx" ? "→" : "←"}</span>
             <span class="ascii">{e.ascii || "(空)"}</span>
             <span class="hex">{e.hex}</span>
