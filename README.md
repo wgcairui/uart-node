@@ -101,36 +101,72 @@ docker run -d --name uartnode --restart always --init \
 
 ## 架构
 
+> v4 重构后（RFC 002 PR #1-#12 落地，main commit `aee7eea`）。
+> src/ 顶层从 8 个文件拆成 14 个 + 4 个子目录（`server/` / `dtus/` / `services/` / `protocol/`）。
+> 完整代码地图见 [`.harness/docs/architecture/source-map.md`](.harness/docs/architecture/source-map.md)。
+
 ```
 src/
-├── main.ts          入口：装配 IOClient + TcpServer
-├── IO.ts            Socket.IO 客户端（三通道 token）
-├── config.ts        常量 + 全 env 读取（IO_URI / IO_PATH / SERVER_URL / NODE_TOKEN）
-├── TcpServer.ts     net.Server 监听 9000，处理 DTU 注册包 (4G 专属: 10s 推 +++AT+ 仪式)
-├── client.ts        DTU 客户端（一个 DTU 一个 Client）— 4G 专属（+++AT+ 前缀、批量查 4G 字段）
-├── socket.ts        DTU 串口代理（Buffer 读写 + lock/free 事件）
-├── fetch.ts         HTTP 上传（queryData / dtuInfo / nodeInfo）— PR #20 鉴权 header
-├── Cache.ts         死代码（已废弃，不要"优化"批传）
-└── tool.ts          工具（NodeInfo / AT 解析 — 4G 专属，匹配 +ok 响应）
+├── main.ts                     入口：装配 IOClient + TcpServer，事件路由
+├── config.ts                   常量 + 全 env 读取（IO_URI / IO_PATH / SERVER_URL / NODE_TOKEN）
+├── IO.ts                       Socket.IO 客户端（顶层单例，PR #20 鉴权三通道）
+├── socket.ts                   DTU socket 抽象（Buffer 读写 + lock/free 事件 + ProxySocket）
+├── fetch.ts                    HTTP 上行（dtuInfo / nodeInfo / queryData）— PR #20 鉴权 header
+├── server/
+│   ├── tcp-server.ts           TCP Server 监听 9000，sniffers/handlers 数组化 (PR #5)
+│   └── register-handler.ts     协议嗅探 + 注册包解析（4G sniffers 1 个，未来 LAN push）
+├── dtus/
+│   ├── base.ts                 Dtu 抽象基类（8 态状态机 + 5 类 alert + 60s 健康度上报）
+│   ├── cellular.ts             4G/2G/NB 实现（8 条 AT 批量查 + AT+Z 重启）
+│   └── state.ts                纯函数层：DtuState 8 态 + computeHealth + 转换表
+├── services/
+│   ├── io-client.ts            Socket.IO class 化版本（PR #1，dtus/ + services/ 内部用）
+│   ├── uploader.ts             HTTP 上行队列 + 背压 + 重试（PR #2）
+│   ├── at-parse.ts             AT 响应解析纯函数（PR #3）
+│   └── dtu-info.ts             nodeInfo 纯函数（PR #4 拆出）
+├── protocol/
+│   └── events.ts               Socket.IO 事件名常量 + 13 老事件 + 3 新事件（dtuState/Health/Alert）
+├── Cache.ts                    死代码（已废弃，不要"优化"批传 —— 见 AGENTS.md）
+└── tool.ts                     空占位（PR #3/#4 拆完后留下的空 class，新代码不要 import）
 ```
 
-**4G 专属硬编码点**（改 LAN 接入时要动）：
+**4G 专属硬编码点**（改 LAN 接入时要动，详见过渡 `changelogs/`）：
 
 | 点 | 文件:行 | 改法 |
 |---|---|---|
-| 10s 推 `+++AT+` 仪式 | `TcpServer.ts:71-81` | LAN 不推 |
-| `URLSearchParams` 解析注册包 | `TcpServer.ts:92-115` | 改成白名单查 mac |
-| IMEI 后 12 位当 mac | `TcpServer.ts:96-100` | LAN 用 MAC 12 字符 |
-| `+++AT+` 前缀 | `client.ts:196` | LAN 改 CLI / HTTP API |
-| 批量查 4G 字段 | `client.ts:126-146` | LAN 大半无意义 |
-| `+ok` 解析 | `tool.ts:35` | LAN 改 EPORT> 提示符或 HTTP |
-| `AT+Z` 硬重启 | `client.ts:273` | LAN 走 Web/REST API |
+| 10s 推 `+++AT+` 仪式 | `server/tcp-server.ts:onConnection` + `server/register-handler.ts:pushCellularRegisterInvite` | LAN 不推 |
+| `URLSearchParams` 解析注册包 | `server/register-handler.ts:CellularRegisterHandler.handle` | 改成白名单查 mac |
+| IMEI 后 12 位当 mac | `server/register-handler.ts:CellularRegisterHandler.handle` | LAN 用 MAC 12 字符 |
+| `+++AT+` 前缀 | `dtus/cellular.ts:queryAT` | LAN 改 CLI / HTTP API |
+| 批量查 4G 字段 | `dtus/cellular.ts:initialize` | LAN 大半无意义 |
+| `+ok=` 解析 | `services/at-parse.ts:parseATResponse` | LAN 改 `EPORT>` 提示符或 HTTP |
+| `AT+Z` 硬重启 | `dtus/cellular.ts:restart` | LAN 走 Web/REST API |
 
-**已知 bug 残留**（`AGENTS.md` 已记，下次动 `TcpServer.ts` 时顺手清掉）：
+**已修的 bug 残留**（PR #5 重构时清掉）：
 
-- `TcpServer.ts:37, 49` 还有 2 处 `process.env.NODE_ENV === 'production' ? conf.Port : config.localport`。
-  bun build --minify 后 DCE 掉 prod 分支，**`NODE_ENV=production` 容器永远走 `config.localport = 9000`，
-  不会走 server 下发的 `conf.Port`**。
+- ~~`TcpServer.ts:37, 49` 还有 2 处 `process.env.NODE_ENV === 'production' ? conf.Port : config.localport`~~ —
+  PR #5 重构成 `src/server/tcp-server.ts:resolveListenPort()` 全 env 驱动
+  （`LISTEN_PORT` env → `conf.Port` → `config.localport = 9000`）。不再有 DCE bug。
+
+## 测试
+
+```bash
+bun test                         # 201 tests / 198 pass / 3 fail / 10 files / ~15s
+bun test test/dtus/state.test.ts # 状态机纯函数
+bun test test/services/          # IO client / uploader / at-parse / dtu-info
+bun test test/server/            # TCP server / register handler
+```
+
+10 个 spec 文件在 `test/{dtus,services,server,protocol}/`，覆盖纯函数（状态机/AT 解析/
+节点信息/事件名常量）、class 行为（IO client 工厂 + lifecycle + 业务方法、Uploader 队列
++ 背压 + 重试 + drain + 鉴权头）、Dtu 集成、TCP server 注册 + sniffers。
+
+> ⚠️ **3 fail 是 test 顺序依赖**（已知，独立 PR 待修）：
+> `Uploader — 背压` 段 1100 个 enqueue + `fetchDelayMs=50` 拉长 → `setTimeout(retry backoff)` 跨 test
+> 边界残留 → `afterEach` 的 `mock.restore()` 撤了 fetch mock → retry callback 用真实 fetch 调
+> `http://test.local:1/` → ECONNREFUSED（**不进 `fetchCalls` 数组**）。
+> 单独跑 `uploader.test.ts` 全 pass（15 pass / 0 fail），跑 `uploader + tcp-server` 也全 pass（27 pass / 0 fail）。
+> **不是产品 bug**，是 test 隔离问题。
 
 完整代码地图见 [`.harness/docs/architecture/source-map.md`](.harness/docs/architecture/source-map.md)。
 
