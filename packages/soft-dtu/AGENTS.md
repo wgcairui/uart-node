@@ -42,6 +42,44 @@ interface ProtocolDefinition {
 
 > ⚠️ **不要私自起新 server 端表 / 改 schema**：user memory "跨 worker 字段名约定" 那条——拍板落地前必 ping sibling，错位会**静默失败**（HTTP 拉不到 → 走 offline fallback → UI 显示协议少）。
 
+## 协议边界（device.protocols vs soft_dtu.protocols）
+
+uart-server（sibling agent `agent-ae682922673b`）跟软 DTU 端**完全两个独立 collection**，不要混淆。
+
+| 维度 | `device.protocols` (existing) | `soft_dtu.protocols` (new) |
+|---|---|---|
+| **总数 (2026-07-16)** | 30 条 | 2 条 |
+| **Type / type** | `485`(19) / `232`(11) | `cellular-4g-dtu` / `modbus-rtu` |
+| **ProtocolType / type** | `ups`(16) / `air`(8) / `em`(2) / `th`(2) / `io`(2) | (按 DTU 传输层分类, 不按设备品类) |
+| **业务定位** | DTU 后面的 485/232 设备 modbus 指令表 | 软 DTU 自身传输层协议目录 |
+| **AI 协议生成器** | ✅ admin web `/admin/ai` LLM 生成 (决策 16/19/20) | ❌ server seed 静态 + 软 DTU 端 schema 校验 |
+| **instruct 字段** | ✅ modbus 寄存器读/写 hex (0300000002) | ❌ 用 atCommands[] + registers[] |
+| **AT 指令** | ❌ 不存 | ✅ hanfeng-4g-hf2411.atCommands[13] |
+| **source** | `admin` / `ai-generate` / `ai-chat` | `bootstrap` (built-in seed) |
+| **典型条目** | `温湿度1` / `卡乐控制器` / `ZL-U09D2` / `HW-UPS5000` | `汉枫 4G HF2411` / `Modbus RTU RS485 默认` |
+
+**两者正交, 不存在 1:1 映射**:
+- `device.protocols.ProtocolType` 描述"485/232 总线下挂的设备品类"（UPS / 空调 / 电力监测 / 温湿度 / 开关量）
+- `soft_dtu.protocols.type` 描述"软 DTU 自身传输层"（4G / modbus）
+- 一个 4G cellular-4g-dtu 软 DTU 后面可以挂 1 个 ups 设备 + 1 个 th 设备（叠加关系）
+
+**WebView 截图里看到的 "13 条 AT 指令"**（`+++AT+PID` 等）**存 `soft_dtu.protocols.atCommands[]`, 跟 `device.protocols.instruct[]` 完全无关**. 后者是 modbus 寄存器指令 hex (0300000002), 不是 AT 指令.
+
+**加新协议分工**:
+
+| 任务 | 改 collection | 改 uart-server 端 | 改软 DTU 端 |
+|---|---|---|---|
+| 加新 4G DTU 品牌 (非汉枫) | `soft_dtu.protocols` | `src/module/soft-dtu/dto/built-in-protocols.ts` 加 seed | `src/dtus/cellular.ts` 加分支适配 |
+| 加新 485/232 设备 | `device.protocols` | admin web `/admin/ai` 或手填 | (不涉及) |
+| 改 AT 指令格式 (汉枫 4G) | `soft_dtu.protocols.atCommands[]` | `built-in-protocols.ts` 同步 | `src/dtus/cellular.ts` 同步 |
+| 改 modbus 寄存器表 (modbus-rtu-default 那种) | `soft_dtu.protocols.registers[]` | `built-in-protocols.ts` 同步 | (用 server 拉的) |
+
+**改协议 schema 必 ping sibling agent**（`agent-ae682922673b`):
+- uart-server 拥有 `device.protocols` + `soft_dtu.protocols` 两个 collection 的定义权
+- 软 DTU 是实现层, 改字段名 / 加新字段 → 必 ping sibling 拍板
+- 错位会**静默失败**（HTTP 拉不到 → 走 offline fallback → UI 只显示 modbus RTU, 用户以为 bug 实际是协议目录不全）
+- 这条跟 user memory "跨 worker 字段名约定" 强化绑定
+
 ## 跟 UartNode 4G 协议契约（行为 1:1 兼容）
 
 - 软 DTU 是 device，UartNode 是 server —— 软 DTU 主动 connect `UartNode:9000`
