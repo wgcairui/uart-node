@@ -1032,3 +1032,543 @@ table tr:hover td {
     color: var(--text-primary);
   }
 }
+
+/* ═══════════════════════════════════════════════════════════════════
+ * 以下为接力 worker 补的 12 项细化（保持前 worker 风格基调）
+ *  1. SVG icon 容器
+ *  2. Status pill pulse 动画
+ *  3. Focus ring (button / input / select)
+ *  4. Nav shortcut (⌘1/2/3/4) 显示
+ *  5. Empty state 组件
+ *  6. Error banner (icon + dismiss)
+ *  7. Toast / Snackbar
+ *  8. AT console — 命令历史 / Cmd+Enter / Clear log
+ *  9. HEX view 三栏 (offset / hex / ascii, 16B/行)
+ * 10. Status bar "last sync"
+ * 11. Segmented control 微调
+ * 12. Meta grid (ProtocolViewer dt/dd)
+ * ═══════════════════════════════════════════════════════════════════ */
+
+/* ─── 1. SVG icon 容器 (sidebar nav) ─── */
+
+.nav-icon {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  transition: color var(--t-fast) var(--ease-out);
+}
+
+.nav-icon > svg {
+  width: 18px;
+  height: 18px;
+}
+
+.nav-item:hover .nav-icon {
+  color: var(--text-primary);
+}
+
+.nav-item.active .nav-icon {
+  color: var(--accent-blue);
+}
+
+/* ─── 4. Nav shortcut (⌘1/2/3/4) ─── */
+
+.nav-shortcut {
+  margin-left: auto;
+  padding: 0 var(--s-1);
+  font-size: var(--t-micro);
+  font-family: var(--font-mono);
+  color: var(--text-tertiary);
+  letter-spacing: var(--tr-body);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+  border: 1px solid var(--separator-thin);
+  border-radius: var(--r-sm);
+  min-width: 22px;
+  text-align: center;
+  background: var(--bg-input);
+}
+
+.nav-item.active .nav-shortcut {
+  color: var(--accent-blue);
+  border-color: rgba(10, 132, 255, 0.3);
+  background: rgba(10, 132, 255, 0.12);
+}
+
+/* ─── 2. Status pill pulse 动画 (在线状态点) ─── */
+
+.status-pill.connected::before {
+  background: var(--accent-green);
+  box-shadow: 0 0 6px var(--accent-green);
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+.status-bar .indicator.connected {
+  background: var(--accent-green);
+  animation: pulse-dot 2s ease-in-out infinite;
+  box-shadow: 0 0 4px var(--accent-green);
+}
+
+@keyframes pulse-dot {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(48, 209, 88, 0.5);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(48, 209, 88, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-pill.connected::before,
+  .status-bar .indicator.connected {
+    animation: none;
+  }
+}
+
+/* ─── 3. Focus ring (Apple 风格) ─── */
+
+button:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
+}
+
+button.primary:focus-visible {
+  outline-color: var(--accent-blue-hover);
+}
+
+input:focus-visible,
+select:focus-visible,
+.cmd-input:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 0;
+  border-color: transparent;
+  box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.35);
+}
+
+.nav-item:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: -2px;
+  border-radius: var(--r-sm);
+}
+
+/* ─── 5. Empty state 组件 ─── */
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 80px 24px;
+  text-align: center;
+  color: var(--text-secondary);
+  min-height: 240px;
+}
+
+.empty-state-icon {
+  width: 56px;
+  height: 56px;
+  color: var(--text-tertiary);
+  margin-bottom: var(--s-4);
+  opacity: 0.7;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.empty-state-icon > svg {
+  width: 48px;
+  height: 48px;
+  stroke-width: 1.2;
+}
+
+.empty-state-title {
+  font-size: var(--t-title2);
+  font-weight: var(--w-semibold);
+  color: var(--text-primary);
+  letter-spacing: var(--tr-title);
+  line-height: var(--lh-snug);
+  margin-bottom: var(--s-1);
+}
+
+.empty-state-hint {
+  font-size: var(--t-callout);
+  color: var(--text-secondary);
+  max-width: 360px;
+  line-height: var(--lh-normal);
+  margin-bottom: var(--s-4);
+}
+
+.empty-state-action {
+  margin-top: var(--s-2);
+}
+
+/* ─── 6. Error banner (替换简单 .error, 加 icon + dismiss) ─── */
+
+.error-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-2) var(--s-4);
+  background: rgba(255, 69, 58, 0.12);
+  border: 1px solid rgba(255, 69, 58, 0.3);
+  border-radius: var(--r-md);
+  color: var(--accent-red);
+  font-size: var(--t-callout);
+  letter-spacing: var(--tr-body);
+  line-height: var(--lh-snug);
+  animation: error-banner-in 200ms var(--ease-out);
+}
+
+.error-banner-icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.error-banner-text {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+}
+
+.error-banner-dismiss {
+  background: transparent;
+  border: none;
+  color: var(--accent-red);
+  font-size: 18px;
+  font-weight: var(--w-medium);
+  line-height: 1;
+  padding: var(--s-1) var(--s-2);
+  cursor: pointer;
+  border-radius: var(--r-sm);
+  flex-shrink: 0;
+  height: auto;
+  transition: background var(--t-fast) var(--ease-out);
+}
+
+.error-banner-dismiss:hover {
+  background: rgba(255, 69, 58, 0.2);
+}
+
+.error-banner-dismiss:active {
+  transform: scale(0.92);
+}
+
+@keyframes error-banner-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ─── 7. Toast / Snackbar (右下角, 3s 自动消失, materialize animation) ─── */
+
+.toast-stack {
+  position: fixed;
+  right: var(--s-6);
+  bottom: 44px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  z-index: 100;
+  pointer-events: none;
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-4);
+  background: rgba(58, 58, 60, 0.95);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-2);
+  color: var(--text-primary);
+  font-size: var(--t-callout);
+  letter-spacing: var(--tr-body);
+  pointer-events: auto;
+  min-width: 200px;
+  max-width: 360px;
+  animation: toast-in 240ms var(--ease-spring);
+}
+
+.toast.toast-out {
+  animation: toast-out 200ms var(--ease-out) forwards;
+}
+
+.toast-icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent-green);
+}
+
+.toast-icon > svg { width: 16px; height: 16px; }
+
+.toast-text {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.96); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes toast-out {
+  from { opacity: 1; transform: translateY(0) scale(1); }
+  to   { opacity: 0; transform: translateY(8px) scale(0.96); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast { animation: none; }
+}
+
+/* ─── 8. AT console — 命令历史 / Cmd+Enter / Clear log ─── */
+
+.cmd-input {
+  font-family: var(--font-mono);
+  font-size: var(--t-callout);
+  height: 32px;
+  letter-spacing: var(--tr-body);
+  caret-color: var(--accent-blue);
+}
+
+.cmd-input::placeholder {
+  color: var(--text-tertiary);
+}
+
+.cmd-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  margin-top: var(--s-2);
+  font-size: var(--t-micro);
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  letter-spacing: var(--tr-body);
+}
+
+.cmd-toolbar .kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  background: var(--bg-input);
+  border: 1px solid var(--separator-thin);
+  border-radius: var(--r-sm);
+  font-size: 10px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.log-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+  padding: 0 var(--s-3);
+  margin-bottom: var(--s-1);
+  font-size: var(--t-micro);
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  letter-spacing: var(--tr-body);
+}
+
+.log-toolbar .label {
+  text-transform: uppercase;
+  letter-spacing: var(--tr-caps);
+}
+
+.log-toolbar button {
+  height: 22px;
+  padding: 0 var(--s-3);
+  font-size: var(--t-micro);
+}
+
+/* ─── 9. HEX view 三栏 (offset / hex / ascii, 16B/行) ─── */
+
+.hex-row {
+  display: grid;
+  grid-template-columns: 64px 1fr 160px;
+  gap: var(--s-4);
+  padding: 2px var(--s-3);
+  border-radius: var(--r-sm);
+  transition: background var(--t-fast) var(--ease-out);
+  font-family: var(--font-mono);
+  font-size: var(--t-caption);
+  line-height: 1.65;
+  align-items: baseline;
+}
+
+.hex-row:hover {
+  background: var(--bg-button);
+}
+
+.hex-row .ts {
+  color: var(--text-tertiary);
+  font-size: var(--t-micro);
+  grid-column: 1 / -1;
+  margin-bottom: 2px;
+  font-variant-numeric: tabular-nums;
+}
+
+.hex-row .hex-offset {
+  color: var(--text-tertiary);
+  font-size: var(--t-micro);
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+  align-self: baseline;
+}
+
+.hex-row .hex-bytes {
+  color: var(--accent-blue);
+  letter-spacing: 0.04em;
+  white-space: pre;
+  word-break: break-all;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+
+.hex-row .hex-ascii {
+  color: var(--text-primary);
+  white-space: pre;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+
+.hex-row .hex-bytes .nibble {
+  display: inline-block;
+  min-width: 1.7em;
+}
+
+.hex-row .hex-bytes .gap {
+  display: inline-block;
+  width: 0.6em;
+}
+
+/* ─── 10. Status bar "last sync" ─── */
+
+.status-bar .last-sync {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.status-bar .last-sync.never {
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+
+.status-bar .last-sync.fresh {
+  color: var(--accent-green);
+}
+
+/* ─── 11. Segmented control 微调（pill shape, SF 风格）─── */
+
+.seg {
+  display: inline-flex;
+  background: var(--bg-input);
+  border-radius: var(--r-md);
+  padding: 2px;
+  gap: 2px;
+  border: 1px solid var(--separator-thin);
+}
+
+.seg-btn {
+  padding: 0 var(--s-3);
+  height: 24px;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: var(--t-micro);
+  font-family: var(--font-sans);
+  font-weight: var(--w-medium);
+  border-radius: 7px;
+  cursor: pointer;
+  letter-spacing: var(--tr-caps);
+  text-transform: uppercase;
+  transition: background var(--t-fast) var(--ease-out),
+              color var(--t-fast) var(--ease-out),
+              box-shadow var(--t-fast) var(--ease-out);
+}
+
+.seg-btn:hover:not(.active) {
+  color: var(--text-primary);
+}
+
+.seg-btn.active {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-1);
+}
+
+.seg-btn:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+/* ─── 12. Meta grid (ProtocolViewer dt/dd, SF card 风格) ─── */
+
+dl.meta {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--s-2) var(--s-5);
+  font-size: var(--t-callout);
+  line-height: var(--lh-normal);
+  font-family: var(--font-mono);
+  margin: 0;
+  padding: 0;
+}
+
+dl.meta dt {
+  color: var(--text-secondary);
+  font-weight: var(--w-medium);
+  text-transform: uppercase;
+  letter-spacing: var(--tr-caps);
+  font-size: var(--t-micro);
+  padding-top: 3px;
+}
+
+dl.meta dd {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  margin: 0;
+  word-break: break-word;
+}
+
+dl.meta dd > code {
+  display: inline-block;
+  background: var(--bg-input);
+  color: var(--accent-blue);
+  padding: 2px var(--s-2);
+  border-radius: var(--r-sm);
+  font-size: var(--t-caption);
+  font-family: var(--font-mono);
+}
+
+dl.meta dd > code.regex {
+  color: var(--accent-orange);
+}
+
+/* ─── 接力 patch: 浅色模式下保持 dark tokens（避免视觉跳变）─── */
+@media (prefers-color-scheme: light) {
+  .toast,
+  .cmd-toolbar .kbd,
+  .seg {
+    /* light mode 仍走 dark, 不变 */
+  }
+}

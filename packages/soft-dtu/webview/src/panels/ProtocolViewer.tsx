@@ -2,7 +2,13 @@
  * 协议定义浏览器 — Apple SF card layout
  *
  * 顶部：协议 select + 强制刷新 + 计数
- * 详情（card）：标题 / meta dl / 注册包 / AT 指令表 / 寄存器表 / 默认串口参数 / 元数据
+ * 详情（card）：标题 / meta dl (dt/dd SF card 风格) / 注册包 / AT 指令表 / 寄存器表 / 默认串口参数 / 元数据
+ *
+ * 接力补的细节:
+ *   - EmptyState 组件 (没选协议时显示, 大 icon + 标题 + hint)
+ *   - ErrorBanner 替换简单 .error
+ *   - meta dl 用 SF card 风格 (column 1 caption uppercase, column 2 mono code)
+ *   - 全局 table caption 大写 (跟 meta dt 一致)
  *
  * 离线 fallback 显示提示（server 不可达时只有 modbus RTU）
  */
@@ -10,12 +16,16 @@
 import { useEffect, useState } from "preact/hooks";
 import { protocol } from "../api.ts";
 import type { ProtocolDefinition } from "../bindings.ts";
+import { EmptyState } from "../components/EmptyState.tsx";
+import { ErrorBanner } from "../components/ErrorBanner.tsx";
+import { IconProtocol } from "../icons.tsx";
 
 export function ProtocolViewer() {
   const [protocols, setProtocols] = useState<ProtocolDefinition[]>([]);
   const [selectedId, setSelectedId] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loaded, setLoaded] = useState(false);
 
   async function load(force = false) {
     setLoading(true);
@@ -27,6 +37,7 @@ export function ProtocolViewer() {
       setError(`协议拉取失败: ${(err as Error).message}`);
     } finally {
       setLoading(false);
+      setLoaded(true);
     }
   }
 
@@ -35,6 +46,9 @@ export function ProtocolViewer() {
   }, []);
 
   const selected = protocols.find((p) => p.id === selectedId);
+  const isOfflineFallback = !selected
+    && protocols.length === 1
+    && protocols[0]?.id === "modbus-rtu-default";
 
   return (
     <div class="protocol-viewer">
@@ -42,6 +56,16 @@ export function ProtocolViewer() {
         <h2 class="panel-title">协议定义</h2>
         <p class="panel-subtitle">从 server 拉的协议目录 · 手动选协议查看详情</p>
       </div>
+
+      {error && (
+        <ErrorBanner onDismiss={() => setError(null)}>{error}</ErrorBanner>
+      )}
+
+      {isOfflineFallback && (
+        <div class="warn">
+          ⚠️ 协议目录是离线模式（server 不可达），只显示 modbus RTU fallback。
+        </div>
+      )}
 
       <section class="card">
         <div class="card-title">选择</div>
@@ -51,6 +75,7 @@ export function ProtocolViewer() {
             <select
               value={selectedId}
               onChange={(e) => setSelectedId((e.target as HTMLSelectElement).value)}
+              aria-label="选择协议"
             >
               <option value="">（不选）</option>
               {protocols.map((p) => (
@@ -67,31 +92,37 @@ export function ProtocolViewer() {
         </div>
       </section>
 
-      {!selected && protocols.length === 1 && protocols[0].id === "modbus-rtu-default" && (
-        <div class="warn">
-          ⚠️ 协议目录是离线模式（server 不可达），只显示 modbus RTU fallback。
-        </div>
+      {!selected && loaded && (
+        <EmptyState
+          icon={<IconProtocol />}
+          title="选择一个协议"
+          hint="从上方下拉菜单选择软 DTU 协议, 查看 AT 指令和寄存器表"
+        />
       )}
 
       {selected && (
         <div class="protocol-detail">
           <h2>{selected.name}</h2>
           <dl class="meta">
-            <dt>ID</dt><dd><code>{selected.id}</code></dd>
-            <dt>类型</dt><dd>{selected.type}</dd>
-            {selected.manufacturer && <><dt>厂商</dt><dd>{selected.manufacturer}</dd></>}
-            {selected.model && <><dt>型号</dt><dd>{selected.model}</dd></>}
-            {selected.category && <><dt>分类</dt><dd>{selected.category}</dd></>}
-            {selected.version && <><dt>版本</dt><dd>{selected.version}</dd></>}
-            {selected.transport && <><dt>传输</dt><dd><code>{selected.transport}</code></dd></>}
+            <dt>ID</dt>
+            <dd><code>{selected.id}</code></dd>
+            <dt>类型</dt>
+            <dd>{selected.type}</dd>
+            {selected.manufacturer && (<><dt>厂商</dt><dd>{selected.manufacturer}</dd></>)}
+            {selected.model && (<><dt>型号</dt><dd>{selected.model}</dd></>)}
+            {selected.category && (<><dt>分类</dt><dd>{selected.category}</dd></>)}
+            {selected.version && (<><dt>版本</dt><dd>{selected.version}</dd></>)}
+            {selected.transport && (<><dt>传输</dt><dd><code>{selected.transport}</code></dd></>)}
           </dl>
 
           {selected.register && (
             <section>
               <h3>注册包</h3>
               <dl class="meta">
-                <dt>格式</dt><dd><code>{selected.register.format}</code></dd>
-                <dt>IMEI 位数</dt><dd>{selected.register.imeiLength}</dd>
+                <dt>格式</dt>
+                <dd><code>{selected.register.format}</code></dd>
+                <dt>IMEI 位数</dt>
+                <dd>{selected.register.imeiLength}</dd>
                 <dt>触发仪式</dt>
                 <dd>{selected.register.triggerOnInvite ? "是（+++AT+ 后）" : "否"}</dd>
               </dl>
@@ -160,10 +191,14 @@ export function ProtocolViewer() {
             <section>
               <h3>默认串口参数</h3>
               <dl class="meta">
-                <dt>波特率</dt><dd>{selected.defaultSerial.baudRate}</dd>
-                <dt>数据位</dt><dd>{selected.defaultSerial.dataBits}</dd>
-                <dt>停止位</dt><dd>{selected.defaultSerial.stopBits}</dd>
-                <dt>校验</dt><dd>{selected.defaultSerial.parity}</dd>
+                <dt>波特率</dt>
+                <dd>{selected.defaultSerial.baudRate}</dd>
+                <dt>数据位</dt>
+                <dd>{selected.defaultSerial.dataBits}</dd>
+                <dt>停止位</dt>
+                <dd>{selected.defaultSerial.stopBits}</dd>
+                <dt>校验</dt>
+                <dd>{selected.defaultSerial.parity}</dd>
               </dl>
             </section>
           )}
@@ -181,8 +216,6 @@ export function ProtocolViewer() {
           )}
         </div>
       )}
-
-      {error && <div class="error">{error}</div>}
     </div>
   );
 }
