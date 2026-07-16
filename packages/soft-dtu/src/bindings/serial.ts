@@ -18,7 +18,9 @@
  * Phase 2 切 Deno Desktop bindings（避免 HTTP 跨进程）
  */
 
-import type { SerialTransport, SerialPortInfo, SerialOptions } from "../transport/serial.ts";
+// SerialTransport 是 class (value + type) — 不能 import type, 不然 .list() 报 ReferenceError
+// SerialPortInfo / SerialOptions 是 interface, type-only 即可
+import { SerialTransport, type SerialPortInfo, type SerialOptions } from "../transport/serial.ts";
 
 export interface SerialBindings {
   list(): Promise<SerialPortInfo[]>;

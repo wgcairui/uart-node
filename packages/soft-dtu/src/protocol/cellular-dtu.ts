@@ -24,6 +24,9 @@
  *   - 协议定义本地 hardcode（src/protocol/protocol-catalog.ts）
  */
 
+// I2: Node setTimeout 返回 NodeJS.Timeout 对象, 跟 Deno setTimeout 返回 number 类型冲突
+// 软 DTU 同时跑在 Deno runtime, 用 ReturnType<typeof setTimeout> 自动跟随当前 runtime
+// (Deno 时 number, Node 时 Timeout — 都能被 clearTimeout 接受, 实现 OK)
 import { EventEmitter } from "node:events";
 import type { TcpTransport } from "../transport/tcp.ts";
 import type { SoftDtuConfig } from "./config.ts";
@@ -41,7 +44,8 @@ export class CellularDtu extends EventEmitter {
   private registered = false;
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
-  private reconnectTimer: number | null = null;
+  /** I2: 兼容 Node (NodeJS.Timeout) + Deno (number) 两种 setTimeout 返回类型 */
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(opts: CellularDtuOptions) {
     super();

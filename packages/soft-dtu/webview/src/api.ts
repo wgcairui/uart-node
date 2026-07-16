@@ -93,7 +93,11 @@ export const serial: SerialBindings = {
   },
 
   async write(data: string | Uint8Array): Promise<void> {
-    const payload = typeof data === "string" ? { data } : { data: uint8ToBase64(data) };
+    // I4: 显式 encoding — 跟 Deno 端 http-api.ts:write 同步
+    // 之前启发式猜 base64 会把 4 字符 ASCII ("ATEN"/"INFO"/"1234") 误判成 base64
+    const payload = typeof data === "string"
+      ? { data, encoding: "utf8" }
+      : { data: uint8ToBase64(data), encoding: "base64" };
     await http<void>("/serial/write", {
       method: "POST",
       body: JSON.stringify(payload),

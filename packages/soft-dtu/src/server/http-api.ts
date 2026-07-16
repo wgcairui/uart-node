@@ -18,18 +18,44 @@
  * （WebView 直接 IPC 调 bindings，不走 HTTP）
  */
 
-import type { SerialBindings, ProtocolBindings } from "../bindings/serial.ts";
+import type { SerialBindings } from "../bindings/serial.ts";
+import type { ProtocolBindings } from "../bindings/protocol.ts";
 
 interface HttpApiOptions {
   port: number;
   host: string;
 }
 
+/** I5: SSE 连接上限 + idle timeout, 防恶意跨域页 + 资源耗尽 */
+const SSE_MAX_PER_CHANNEL = 16;
+/** I5: SSE idle timeout (10min), 没活动就断 */
+const SSE_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
+
 export function startHttpApi(
   opts: HttpApiOptions,
   serial: SerialBindings,
   protocol: ProtocolBindings,
 ): Deno.HttpServer {
+  // I5: CORS env gate — loopback (dev) 放开, 非 loopback (生产) 走同源代理
+  const isLoopback = (opts.host === "127.0.0.1" || opts.host === "localhost" || opts.host === "::1");
+  /** JSON 响应 (根据 isLoopback 决定 CORS *) */
+  function jsonResponse(data: unknown, init?: ResponseInit): Response {
+    const headers: Record<string, string> = {
+      "content-type": "application/json; charset=utf-8",
+    };
+    if (isLoopback) {
+      headers["access-control-allow-origin"] = "*";
+    } else {
+      // 生产模式: 走 Vite proxy 同源, 不开 CORS *
+      // 如果真的需要跨域, 显式加 origin 白名单
+      headers["vary"] = "origin";
+    }
+    return new Response(JSON.stringify(data), {
+      ...init,
+      headers: { ...headers, ...(init?.headers ?? {}) },
+    });
+  }
+
   const sseClients: Map<string, Set<ReadableStreamDefaultController<Uint8Array>>> = new Map();
 
   /** 广播 SSE 事件到对应 channel 的所有客户端 */
@@ -63,34 +89,24 @@ export function startHttpApi(
     sseBroadcast("close", "close", {});
   });
 
-  /** JSON 响应 */
-  function jsonResponse(data: unknown, init?: ResponseInit): Response {
-    return new Response(JSON.stringify(data), {
-      ...init,
-      headers: {
-        "content-type": "application/json; charset=utf-8",
-        "access-control-allow-origin": "*", // dev only
-        ...(init?.headers ?? {}),
-      },
-    });
-  }
-
   /** 错误响应 */
   function errorResponse(status: number, message: string): Response {
     return jsonResponse({ error: message }, { status });
   }
 
-  /** CORS preflight */
+  /** CORS preflight (I5: loopback 才开 *) */
   function corsPreflight(): Response {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "access-control-allow-origin": "*",
-        "access-control-allow-methods": "GET, POST, OPTIONS",
-        "access-control-allow-headers": "content-type",
-        "access-control-max-age": "86400",
-      },
-    });
+    const headers: Record<string, string> = {
+      "access-control-allow-methods": "GET, POST, OPTIONS",
+      "access-control-allow-headers": "content-type",
+      "access-control-max-age": "86400",
+    };
+    if (isLoopback) {
+      headers["access-control-allow-origin"] = "*";
+    } else {
+      headers["vary"] = "origin";
+    }
+    return new Response(null, { status: 204, headers });
   }
 
   /** 读 JSON body */
@@ -140,15 +156,23 @@ export function startHttpApi(
       }
 
       if (path === "/api/serial/write" && method === "POST") {
-        const body = (await readJson(req)) as { data?: string } | null;
+        // I4: 显式 encoding — 不再启发式猜 base64, 4 字符 ASCII ("ATEN"/"INFO"/"1234") 会被误判
+        // 默认 utf8, 跟 webview api.ts:serial.write 同步
+        const body = (await readJson(req)) as
+          | { data?: string; encoding?: "utf8" | "base64" }
+          | null;
         if (!body?.data) {
           return errorResponse(400, "missing data");
         }
-        // 启发式判断：纯 ASCII 文本 → string；否则 → base64
-        const isLikelyBase64 = /^[A-Za-z0-9+/]+=*$/.test(body.data) && body.data.length % 4 === 0;
-        const data = isLikelyBase64 && body.data.length > 0
-          ? base64ToBytes(body.data)
-          : body.data; // 字符串直接传
+        const encoding = body.encoding ?? "utf8";
+        let data: string | Uint8Array;
+        if (encoding === "base64") {
+          data = base64ToBytes(body.data);
+        } else if (encoding === "utf8") {
+          data = body.data; // 直接传 string, serial.write 会 TextEncoder.encode
+        } else {
+          return errorResponse(400, `unsupported encoding: ${encoding}`);
+        }
         await serial.write(data);
         return jsonResponse({ ok: true });
       }
@@ -165,30 +189,61 @@ export function startHttpApi(
         if (!["data", "error", "close"].includes(channel)) {
           return errorResponse(400, "invalid channel (data|error|close)");
         }
+        // I5: SSE 连接上限 — 防止恶意跨域页 / 资源耗尽
         let set = sseClients.get(channel);
         if (!set) {
           set = new Set();
           sseClients.set(channel, set);
         }
+        if (set.size >= SSE_MAX_PER_CHANNEL) {
+          return errorResponse(429, `SSE channel ${channel} full (${set.size}/${SSE_MAX_PER_CHANNEL})`);
+        }
         const encoder = new TextEncoder();
+        // C2: hoist ctrl 到外层, 让 cancel() 能拿到
+        let myController: ReadableStreamDefaultController<Uint8Array> | null = null;
+        // I5: idle timeout — 10min 无活动自动 close
+        // I2 兼容: 跟 cellular-dtu.ts 一样, ReturnType<typeof setTimeout> 自动跟随当前 runtime
+        let idleTimeout: ReturnType<typeof setTimeout> | null = null;
         const stream = new ReadableStream<Uint8Array>({
           start(ctrl) {
+            myController = ctrl;
             set!.add(ctrl);
             // 立刻推一个 connected 事件让客户端知道 SSE 通了
             ctrl.enqueue(encoder.encode(`event: connected\ndata: ${JSON.stringify({ channel })}\n\n`));
+            // I5: idle timeout
+            idleTimeout = setTimeout(() => {
+              try {
+                ctrl.close();
+              } catch { /* 已被 close */ }
+              if (myController) {
+                set!.delete(myController);
+                myController = null;
+              }
+            }, SSE_IDLE_TIMEOUT_MS);
           },
           cancel() {
-            set!.delete(ctrl);
+            // C2 修: 用外层 hoisted 引用, 不再 ReferenceError
+            if (idleTimeout !== null) {
+              clearTimeout(idleTimeout);
+              idleTimeout = null;
+            }
+            if (myController) {
+              set!.delete(myController);
+              myController = null;
+            }
           },
         });
-        return new Response(stream, {
-          headers: {
-            "content-type": "text/event-stream",
-            "cache-control": "no-cache",
-            "connection": "keep-alive",
-            "access-control-allow-origin": "*",
-          },
-        });
+        const sseHeaders: Record<string, string> = {
+          "content-type": "text/event-stream",
+          "cache-control": "no-cache",
+          "connection": "keep-alive",
+        };
+        if (isLoopback) {
+          sseHeaders["access-control-allow-origin"] = "*";
+        } else {
+          sseHeaders["vary"] = "origin";
+        }
+        return new Response(stream, { headers: sseHeaders });
       }
 
       // ── Protocol ──

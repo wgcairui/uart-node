@@ -60,13 +60,14 @@ export function ATConsole({ onSuccess }: ATConsoleProps = {}) {
   const activeProto = protocols.find((p) => p.id === activeProtoId);
 
   // 拉协议目录（自动补全用）
+  // I3: 不自动选协议 — soft-dtu AGENTS.md 明确说"协议让用户手动选" (Cairui 2026-07-14 16:35 拍板)
+  //     "defaultProtocolId 配置项 — 已删除, 不要加回来"
+  //     跟 main.ts:108 "protocol selection: user picks manually in UI" 一致
   useEffect(() => {
     protocol.list()
       .then((list) => {
         setProtocols(list);
-        // 默认选第一个 4G DTU 协议（手动选 phase 1 留 todo）
-        const first4G = list.find((p) => p.type === "cellular-4g-dtu");
-        if (first4G) setActiveProtoId(first4G.id);
+        // activeProtoId 保持 "" 初始空, 让用户从 dropdown 选
       })
       .catch((err) => setError(`协议拉取失败: ${(err as Error).message}`));
   }, []);
