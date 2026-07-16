@@ -18,7 +18,7 @@ import { serial, getSerialStatus } from "../api.ts";
 import type { SerialPortInfo, SerialOptions } from "../bindings.ts";
 import { ErrorBanner } from "../components/ErrorBanner.tsx";
 import { EmptyState } from "../components/EmptyState.tsx";
-import { IconSerial } from "../icons.tsx";
+import { IconSerial, IconRefresh, IconSend, IconClose } from "../icons.tsx";
 
 const BAUD_RATES = [1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600];
 const DATA_BITS: Array<5 | 6 | 7 | 8> = [5, 6, 7, 8];
@@ -133,6 +133,7 @@ export function SerialConfig({ onSuccess }: SerialConfigProps = {}) {
               ))}
             </select>
             <button onClick={refreshPorts} disabled={loading || isOpen}>
+              <IconRefresh />
               {loading ? "刷新中…" : "刷新"}
             </button>
           </div>
@@ -214,10 +215,12 @@ export function SerialConfig({ onSuccess }: SerialConfigProps = {}) {
               onClick={handleOpen}
               disabled={!selected}
             >
+              <IconSend />
               打开串口
             </button>
           ) : (
             <button class="danger large" onClick={handleClose}>
+              <IconClose />
               关闭串口
             </button>
           )}
@@ -234,6 +237,7 @@ export function SerialConfig({ onSuccess }: SerialConfigProps = {}) {
           hint="检查 USB 转 485 转换器是否插入, 或点击刷新重试"
           action={
             <button onClick={refreshPorts} disabled={loading}>
+              <IconRefresh />
               {loading ? "刷新中…" : "刷新串口列表"}
             </button>
           }

@@ -18,6 +18,7 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { serial } from "../api.ts";
 import { ErrorBanner } from "../components/ErrorBanner.tsx";
+import { IconPlay, IconPause, IconTrash } from "../icons.tsx";
 
 type ViewMode = "hex" | "ascii" | "both";
 
@@ -135,10 +136,20 @@ export function HexView() {
               checked={paused}
               onChange={(e) => setPaused((e.target as HTMLInputElement).checked)}
             />
-            暂停
+            {paused ? "已暂停" : "实时"}
           </label>
+          <button
+            class={paused ? "primary" : ""}
+            onClick={() => setPaused((p) => !p)}
+            aria-label={paused ? "恢复" : "暂停"}
+            title={paused ? "恢复 streaming" : "暂停 streaming"}
+          >
+            {paused ? <IconPlay /> : <IconPause />}
+            {paused ? "恢复" : "暂停"}
+          </button>
 
           <button onClick={clear} disabled={frames.length === 0}>
+            <IconTrash />
             清空
           </button>
           <span class="count">{frames.length} 帧</span>

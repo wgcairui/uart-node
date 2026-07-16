@@ -6,12 +6,12 @@
  *
  * 比前 worker 的 .error (仅文字 + 边框) 多:
  *   - inline error icon (16x16 SVG)
- *   - dismiss × 按钮 (右对齐, hover 加深)
+ *   - dismiss × 按钮 (右对齐, hover 加深) — v2 改 IconClose SVG 替代文字
  *   - 入场动画 (translateY -4px + opacity)
  */
 
 import type { ComponentChildren, JSX } from "preact";
-import { IconError } from "../icons.tsx";
+import { IconError, IconClose } from "../icons.tsx";
 
 export interface ErrorBannerProps {
   onDismiss: () => void;
@@ -35,7 +35,7 @@ export function ErrorBanner(
         onClick={onDismiss}
         aria-label="关闭错误提示"
       >
-        ×
+        <IconClose />
       </button>
     </div>
   );

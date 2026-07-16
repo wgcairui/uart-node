@@ -18,7 +18,7 @@ import { protocol } from "../api.ts";
 import type { ProtocolDefinition } from "../bindings.ts";
 import { EmptyState } from "../components/EmptyState.tsx";
 import { ErrorBanner } from "../components/ErrorBanner.tsx";
-import { IconProtocol } from "../icons.tsx";
+import { IconProtocol, IconRefresh } from "../icons.tsx";
 
 export function ProtocolViewer() {
   const [protocols, setProtocols] = useState<ProtocolDefinition[]>([]);
@@ -86,6 +86,7 @@ export function ProtocolViewer() {
             </select>
           </div>
           <button onClick={() => load(true)} disabled={loading}>
+            <IconRefresh />
             {loading ? "刷新中…" : "强制刷新"}
           </button>
           <span class="count">{protocols.length} 个协议</span>

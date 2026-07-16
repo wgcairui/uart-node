@@ -1,13 +1,16 @@
 /**
  * 软 DTU WebView 主组件 — Sidebar + Header + Status bar 布局
  *
- * 布局（Apple SF dark mode）：
- *   ┌─Sidebar(200px)─┐ ┌─Header(56px)────────────────────┐
+ * v2 接力（cairui 反馈）：暖橙调色板 + 12pt spacing + sidebar 220px +
+ * header 64px + 9 个新 icon + brand mark 换 IconLogo.
+ *
+ * 布局（工业控制台暖色调）：
+ *   ┌─Sidebar(220px)─┐ ┌─Header(64px)────────────────────┐
  *   │  透色 blur       │ │  软 DTU 控制台    [连接状态 pill]│
- *   │  ⚙ 软 DTU        │ ├─────────────────────────────────┤
+ *   │  📡 软 DTU       │ ├─────────────────────────────────┤
  *   │  • 串口配置 ⌘1   │ │                                 │
  *   │  • AT 指令  ⌘2   │ │  [Current panel content]        │
- *   │  • HEX/ASCII⌘3   │ │   - 24px padding                │
+ *   │  • HEX/ASCII⌘3   │ │   - 32px padding                │
  *   │  • 协议定义 ⌘4   │ │   - 卡片化表单                  │
  *   │  ⚙ 设置          │ │   - 表格 / 列表                  │
  *   │  ? 帮助          │ │                                 │
@@ -35,6 +38,11 @@
  *  11. Status bar "last sync" 指示 — 本文件 + Health check 5s 轮询
  *  12. Segmented control pill SF 风格 — styles.css .seg 微调
  *
+ * v2 接力补的 3 项（cairui 浏览器反馈）：
+ *   13. 9 个新 icon (Logo/Refresh/Send/Close/Trash/Play/Pause/Copy/Warning/Info) — icons.tsx
+ *   14. 暖橙调色板 + 12pt spacing grid + sidebar/header/padding 全放宽 — styles.css
+ *   15. 4 panel 按钮加 leading icon (Send/Close/Refresh/Trash/Play/Pause) — panels/*.tsx
+ *
  * Health check 走 /api/health（5s 轮询），protocol count 从 /api/protocols 拿。
  * last sync: health 200 时更新时间, 显示"已同步 HH:MM:SS" / "从未同步"。
  */
@@ -50,6 +58,7 @@ import {
   IconAT,
   IconHex,
   IconProtocol,
+  IconLogo,
   IconSettings,
   IconHelp,
 } from "./icons.tsx";
@@ -167,7 +176,7 @@ export function App() {
       <aside class="sidebar" aria-label="主导航">
         <div class="sidebar-brand">
           <span class="sidebar-brand-mark" aria-hidden="true">
-            <IconSettings />
+            <IconLogo />
           </span>
           <span>软 DTU</span>
         </div>
@@ -192,11 +201,11 @@ export function App() {
           })}
         </nav>
         <div class="sidebar-footer">
-          <button class="nav-item" disabled title="Phase 2">
+          <button class="nav-item" disabled aria-disabled="true" title="Phase 2">
             <span class="nav-icon" aria-hidden="true"><IconSettings /></span>
             <span class="nav-label">设置</span>
           </button>
-          <button class="nav-item" disabled title="Phase 2">
+          <button class="nav-item" disabled aria-disabled="true" title="Phase 2">
             <span class="nav-icon" aria-hidden="true"><IconHelp /></span>
             <span class="nav-label">帮助</span>
           </button>

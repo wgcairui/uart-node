@@ -22,6 +22,7 @@ import { useEffect, useRef, useState, useCallback } from "preact/hooks";
 import { serial, protocol, uint8ToHex } from "../api.ts";
 import type { ProtocolDefinition } from "../bindings.ts";
 import { ErrorBanner } from "../components/ErrorBanner.tsx";
+import { IconSend, IconTrash } from "../icons.tsx";
 
 interface LogEntry {
   ts: number;
@@ -238,6 +239,7 @@ export function ATConsole({ onSuccess }: ATConsoleProps = {}) {
             autoComplete="off"
           />
           <button class="primary large" onClick={send}>
+            <IconSend />
             发送
           </button>
         </div>
@@ -256,6 +258,7 @@ export function ATConsole({ onSuccess }: ATConsoleProps = {}) {
         <div class="log-toolbar">
           <span class="label">日志 · {history.length} 条</span>
           <button onClick={clearLog} disabled={history.length === 0}>
+            <IconTrash />
             清空
           </button>
         </div>
