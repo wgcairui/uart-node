@@ -2,8 +2,9 @@
   "name": "@uart-node/soft-dtu",
   "version": "0.1.0",
   "description": "UartNode 软 DTU (Deno Desktop) — 伪装汉枫 4G 协议连 UartNode + USB 转 485 串口调试工具",
+  "exports": "./main.ts",
   "tasks": {
-    "dev": "deno run -A --watch=src/,main.ts main.ts",
+    "dev": "deno run -A --watch=src/,main.ts --env-file=.env main.ts",
     "start": "deno run -A main.ts",
     "desktop": "deno desktop .",
     "desktop:all": "deno desktop --all-targets .",
@@ -40,6 +41,6 @@
     }
   },
   "nodeModulesDir": "auto",
-  "unstable": ["desktop"],
+  "unstable": [],
   "exclude": ["node_modules", "dist", "webview/dist"]
 }

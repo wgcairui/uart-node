@@ -71,8 +71,11 @@ tcp.on("log", (msg) => console.log(`[tcp] ${msg}`));
 const serial = new SerialTransport();
 
 // 4. 协议仓库（HTTP API 拉协议定义，元数据通道，不鉴权）
+//    baseUrl 只放 origin，path `/api/v2/protocols` 在 ProtocolRepository 内部拼
+//    （之前 `${url}${apiPath}` + 内部 `/api/v2/protocols` 会拼成 `/api/v2/api/v2/protocols`）
 const protocolRepo = new ProtocolRepository({
-  baseUrl: `${config.uartServer.url}${config.uartServer.apiPath}`,
+  baseUrl: config.uartServer.url,
+  apiPath: config.uartServer.apiPath,
   timeoutMs: config.uartServer.timeoutMs,
 });
 

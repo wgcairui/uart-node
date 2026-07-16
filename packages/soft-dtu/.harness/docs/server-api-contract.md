@@ -29,8 +29,30 @@ Accept: application/json
 
 ### 响应（200 OK）
 
+⚠️ **Response envelope** (Cairui 2026-07-16 拍板): midwayuartserver 全局 `ResultSerializationMiddleware`
+会给**所有没 `code` 字段的响应**强包一层 `{code: 200, data: <原内容>}`（src/common/middleware/result-serialization.middleware.ts:64）。
+
+**实际响应**：
+
 ```json
 {
+  "code": 200,
+  "data": {
+    "protocols": [ ... ]
+  }
+}
+```
+
+软 DTU 端 `fetchFromServer` **同时接受两种 shape**（兼容 Phase 2 切其他 server 的可能）：
+- `{code: 200, data: {protocols: [...]}}` ← 当前 midwayuartserver
+- `{protocols: [...]}` ← 裸响应（未来可能）
+
+逻辑：`const list = data?.data?.protocols ?? data?.protocols`，然后 `Array.isArray(list)` 校验。
+
+**契约 schema（`data.data.protocols` 解开后的内容）**：
+
+```json
+[
   "protocols": [
     {
       "id": "hanfeng-4g-hf2411",

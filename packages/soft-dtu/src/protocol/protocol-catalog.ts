@@ -113,12 +113,19 @@ export class ProtocolRepository {
   private lastFetch = 0;
   private readonly cacheTtlMs: number;
   private readonly baseUrl: string;
+  private readonly apiPath: string;
   private readonly timeoutMs: number;
   private fetching: Promise<ProtocolDefinition[]> | null = null;
   private readonly updateHandlers = new Set<(p: ProtocolDefinition[]) => void>();
 
-  constructor(opts: { baseUrl: string; cacheTtlMs?: number; timeoutMs?: number }) {
+  constructor(opts: {
+    baseUrl: string;
+    apiPath?: string;
+    cacheTtlMs?: number;
+    timeoutMs?: number;
+  }) {
     this.baseUrl = opts.baseUrl.replace(/\/$/, "");
+    this.apiPath = (opts.apiPath ?? "/api/v2").replace(/\/$/, "");
     this.cacheTtlMs = opts.cacheTtlMs ?? 5 * 60_000;
     this.timeoutMs = opts.timeoutMs ?? 10_000;
   }
@@ -179,7 +186,7 @@ export class ProtocolRepository {
    * 鉴权：D1=i 不鉴权（dev/内网），生产要加 Bearer token
    */
   private async fetchFromServer(): Promise<ProtocolDefinition[]> {
-    const url = `${this.baseUrl}/api/v2/protocols`;
+    const url = `${this.baseUrl}${this.apiPath}/protocols`;
     console.log(`[protocol-catalog] fetching ${url}`);
     try {
       const res = await fetch(url, {
@@ -193,11 +200,19 @@ export class ProtocolRepository {
         throw new Error(`HTTP ${res.status} ${res.statusText}`);
       }
       const data = await res.json();
-      if (!data || !Array.isArray(data.protocols)) {
-        throw new Error(`invalid response: protocols field not found`);
+      // 兼容 midwayuartserver 全局 `ResultSerializationMiddleware` 的 {code, data, ...} 包装
+      // 也兼容裸响应 {protocols: [...]}（未来 Phase 2 切换其他 server 时可能用）
+      // 详见 .harness/docs/server-api-contract.md "Response envelope" 段
+      const protocolsRaw: unknown = (data as any)?.data?.protocols ?? (data as any)?.protocols;
+      if (!Array.isArray(protocolsRaw)) {
+        throw new Error(
+          `invalid response: protocols field not found (got keys: ${
+            Object.keys(data || {}).join(",")
+          })`,
+        );
       }
       // schema 校验（轻量）
-      const protocols: ProtocolDefinition[] = data.protocols.map((p: any, idx: number) => {
+      const protocols: ProtocolDefinition[] = (protocolsRaw as any[]).map((p: any, idx: number) => {
         if (!p.id || !p.name || !p.type) {
           throw new Error(`protocol[${idx}] missing required fields: id/name/type`);
         }
