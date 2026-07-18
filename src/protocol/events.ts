@@ -41,6 +41,8 @@ export const EVENT_SERVER_READY = 'ready' as const
 export const EVENT_SERVER_QUERY = 'query' as const
 /** Server -> Node: 每分钟心跳（server 拉 nodeInfo） */
 export const EVENT_SERVER_NODE_INFO = 'nodeInfo' as const
+/** Server -> Node: server 端 5min cron 主动 query 当前设备列表 (v3 架构, 2026-07-18) */
+export const EVENT_SERVER_GET_SOCKET_MAPS = 'getSocketMaps' as const
 
 /** Node -> Server: ioOnResult 响应（带回包的事件） */
 export const EVENT_NODE_RESULT = 'result' as const
@@ -77,6 +79,7 @@ export type ServerEventName =
   | typeof EVENT_SERVER_READY
   | typeof EVENT_SERVER_QUERY
   | typeof EVENT_SERVER_NODE_INFO
+  | typeof EVENT_SERVER_GET_SOCKET_MAPS
 
 /** 所有事件名（双向） */
 export type EventName = NodeEventName | ServerEventName
