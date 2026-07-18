@@ -1,45 +1,17 @@
-import os from "os";
-import { nodeInfo } from "uart";
+/**
+ * tool.ts — 工具类占位
+ *
+ * 历史：
+ *   - PR #3: ATParse() 拆到 src/services/at-parse.ts（纯函数 + Result 类型）
+ *   - PR #4: NodeInfo() 拆到 src/services/dtu-info.ts（PR #2 落地 + PR #4 main.ts 切换）
+ *
+ * 保留空文件是为 import 路径不破坏（tool.ts 文件还在 git 历史里，未来可能用作 base64/buffer helper 等通用工具），
+ * 实际已无可用方法。
+ *
+ * 新代码不要 import 这个文件。需要 AT 解析用 `services/at-parse`，
+ * 需要 nodeInfo 用 `services/dtu-info`。
+ */
+
 export default class tool {
-
-  /**
-   * 节点信息
-   */
-  static NodeInfo(): Uart.nodeInfo {
-    const hostname: string = os.hostname();
-    const totalmem: number = os.totalmem() / 1024 / 1024 / 1024;
-    const freemem: number = (os.freemem() / os.totalmem()) * 100;
-    const loadavg: number[] = os.loadavg();
-    const type: string = os.type();
-    const uptime: number = os.uptime() / 60 / 60;
-
-    return {
-      hostname,
-      totalmem: totalmem.toFixed(1) + "GB",
-      freemem: freemem.toFixed(1) + "%",
-      loadavg: loadavg.map(el => parseFloat(el.toFixed(1))),
-      type,
-      uptime: uptime.toFixed(0) + "h",
-      version: os.version()
-    };
-  }
-
-  /**
-   * 处理AT指令结果
-   * @param buffer 
-   */
-  static ATParse(buffer: Buffer | string) {
-    if (Buffer.isBuffer(buffer)) {
-      const str = buffer.toString('utf8')
-      return {
-        AT: /(^\+ok)/.test(str),
-        msg: str.replace(/(^\+ok)/, '').replace(/^\=/, '').replace(/^[0-9]\,/, '')
-      }
-    } else {
-      return {
-        AT: false,
-        msg: ''
-      }
-    }
-  }
+  // 故意保持空 — 旧方法全部外迁
 }
