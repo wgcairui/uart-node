@@ -162,6 +162,34 @@ export class TcpServer {
   }
 
   /**
+   * v3 架构 (2026-07-18): 返当前所有活跃设备的 socketMaps
+   *
+   * server 端 NodeSyncReconciler 5min cron 主动 emit 'getSocketMaps' 给所有 /node namespace 的 socket
+   * Node 端 onAck 响应 `{ ok, socketMaps: Array<{mac, port, ip}> }` (这里返 mac+port+ip, 其他字段 future work)
+   *
+   * 数据源: macSocketMaps 遍历, 拿 socketsb.ip/port
+   * - mac 必返 (server 端对账用)
+   * - port/ip 返 socketsb 内部字段 (this.ip / this.port)
+   * - jw/uart/AT/ICCID/PID/ver/Gver/iotStat/signal 暂留空, future 扩展
+   *
+   * 跟 getOnlineDtu() (返 string[]) 互补: getOnlineDtu 给内部用, getActiveDevices 给 server 对账
+   */
+  getActiveDevices(): Array<{ mac: string; port: number; ip: string }> {
+    const devices: Array<{ mac: string; port: number; ip: string }> = [];
+    for (const [mac, dtu] of this.macSocketMaps) {
+      if (!dtu.socketsb) continue;
+      if (!dtu.getPropertys().connecting) continue;
+      const socketsb: any = dtu.socketsb;
+      devices.push({
+        mac,
+        port: socketsb.port ?? 0,
+        ip: socketsb.ip ?? '',
+      });
+    }
+    return devices;
+  }
+
+  /**
    * 统计 TCP 连接数（返 Promise，main.ts / nodeInfo handler 用）
    * 老 src/TcpServer.ts:123-129 getConnectionsAsync() 行为 1:1
    */

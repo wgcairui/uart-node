@@ -73,7 +73,9 @@ export default {
   },
   EVENT_SERVER: {
     instructQuery: 'instructQuery',
-    DTUoprate: 'DTUoprate'
+    DTUoprate: 'DTUoprate',
+    /** Server -> Node: server 端 5min cron 主动 query 当前设备列表 (v3 架构, 2026-07-18) */
+    getSocketMaps: 'getSocketMaps',
   },
   /** 监听 ip */
   localhost: '0.0.0.0',

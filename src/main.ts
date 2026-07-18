@@ -54,6 +54,21 @@ IOClient
         fetch.nodeInfo(name, node, tcp)
     })
 
+    // v3 架构 (2026-07-18): server 端 5min cron 主动 query Node 端 device list
+    // 跟现有 DTUoprate onAck 模式完全一致, ack 响应 { ok, socketMaps: [...] }
+    // server 端 NodeSyncReconciler 5min cron emit 'getSocketMaps', 5s timeout per node
+    // 失败/timeout 节点 server 端会跳过 (留兜底 staleness 处理, 跟 980612c ship 兼容)
+    // 跟 server 端 `socket.timeout(5000).emit('getSocketMaps', ack)` 配对
+    // - nodeName 字段不返 (server 端从 mongo node.clients 拿, 不需要 Node 端告知)
+    .on(config.EVENT_SERVER.getSocketMaps, (_payload: unknown, ack?: (result: { ok: number; msg?: string; socketMaps: Array<{ mac: string; port: number; ip: string }> }) => void) => {
+        try {
+            const socketMaps = tcpServer.getActiveDevices()
+            if (ack) ack({ ok: 1, socketMaps })
+        } catch (err) {
+            if (ack) ack({ ok: 0, msg: (err as Error).message, socketMaps: [] })
+        }
+    })
+
 /**
  * 注册dtu
  * @param data dtu注册信息
